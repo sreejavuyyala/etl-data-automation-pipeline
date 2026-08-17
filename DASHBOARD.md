@@ -9,8 +9,8 @@ Every figure on this page was read out of the pipeline's own run log
 executing against a live database. Nothing here is estimated. Regenerate with
 `python -m etl.metrics --write`.
 
-> **Generated** 2026-08-17 02:46 UTC · SQL Server 2022 (16.0.4265.3, Developer Edition) ·
-> AdventureWorks2022 (31,465 orders / 121,317 order lines)
+> SQL Server 2022 (16.0.4265.3, Developer Edition) · AdventureWorks2022
+> (31,465 orders / 121,317 order lines)
 
 ---
 
