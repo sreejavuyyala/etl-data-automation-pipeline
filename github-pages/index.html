@@ -1,0 +1,905 @@
+<title>ETL Pipeline Run Ledger</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Measured results from a scheduled, self-validating ETL pipeline: AdventureWorks2022 into a SQL Server 2022 reporting warehouse.">
+
+<style>
+/* ===========================================================================
+   Tokens — light is the base; dark is redefined twice so both the OS setting
+   and an explicit theme stamp win in their own direction.
+   Palette derives from the validated data-viz reference instance, so the
+   chart colors below are the ones the CVD validator passed against these
+   exact surfaces.
+   =========================================================================== */
+:root {
+  color-scheme: light;
+
+  --plane:        #f2f2ee;
+  --surface:      #fcfcfb;
+  --surface-sunk: #f7f7f4;
+
+  --ink:          #0b0b0b;
+  --ink-2:        #52514e;
+  --ink-muted:    #898781;
+
+  --rule:         #e1e0d9;
+  --rule-strong:  #c3c2b7;
+
+  --accent:       #2a78d6;
+  --accent-soft:  rgba(42, 120, 214, 0.10);
+
+  /* Status colors are fixed across themes by design, so a status hue never
+     drifts into impersonating a series color. --critical is the mark (bar
+     fill, stroke) and is the exact value the CVD validator passed against
+     both surfaces. --critical-text is a separate role: at 10-12px, #d03b3b
+     only reaches 3.6:1 on the dark ground, so small text gets a lighter step
+     while the marks stay put. */
+  --critical:      #d03b3b;
+  --critical-text: #d03b3b;
+  --critical-soft: rgba(208, 59, 59, 0.10);
+  --good:         #006300;
+  --good-soft:    rgba(12, 163, 12, 0.12);
+
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  --measure: 68ch;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --plane:        #0d0d0d;
+    --surface:      #1a1a19;
+    --surface-sunk: #141413;
+    --ink:          #ffffff;
+    --ink-2:        #c3c2b7;
+    --ink-muted:    #898781;
+    --rule:         #2c2c2a;
+    --rule-strong:  #383835;
+    --accent:       #3987e5;
+    --accent-soft:  rgba(57, 135, 229, 0.16);
+    --critical:      #d03b3b;
+    --critical-text: #e8807f;
+    --critical-soft: rgba(208, 59, 59, 0.22);
+    --good:         #0ca30c;
+    --good-soft:    rgba(12, 163, 12, 0.18);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --plane:        #0d0d0d;
+  --surface:      #1a1a19;
+  --surface-sunk: #141413;
+  --ink:          #ffffff;
+  --ink-2:        #c3c2b7;
+  --ink-muted:    #898781;
+  --rule:         #2c2c2a;
+  --rule-strong:  #383835;
+  --accent:       #3987e5;
+  --accent-soft:  rgba(57, 135, 229, 0.16);
+  --critical:      #d03b3b;
+  --critical-text: #e8807f;
+  --critical-soft: rgba(208, 59, 59, 0.22);
+  --good:         #0ca30c;
+  --good-soft:    rgba(12, 163, 12, 0.18);
+}
+
+/* =========================================================================== */
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--plane);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 24px 96px;
+}
+
+/* --- masthead ------------------------------------------------------------ */
+.masthead {
+  padding: 56px 0 28px;
+  border-bottom: 2px solid var(--ink);
+}
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin: 0 0 18px;
+}
+
+h1 {
+  font-family: var(--mono);
+  font-size: clamp(28px, 4.6vw, 46px);
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+  margin: 0 0 16px;
+  text-wrap: balance;
+}
+
+.standfirst {
+  max-width: var(--measure);
+  font-size: 17px;
+  color: var(--ink-2);
+  margin: 0 0 24px;
+}
+
+.provenance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.provenance li {
+  border: 1px solid var(--rule-strong);
+  padding: 4px 9px;
+  background: var(--surface);
+}
+
+/* --- section scaffolding ------------------------------------------------- */
+section { padding-top: 56px; }
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  border-bottom: 1px solid var(--rule-strong);
+  padding-bottom: 10px;
+  margin-bottom: 28px;
+}
+
+h2 {
+  font-family: var(--mono);
+  font-size: 15px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 600;
+  margin: 0;
+}
+
+.section-note {
+  font-size: 13px;
+  color: var(--ink-muted);
+  margin: 0;
+  margin-left: auto;
+  text-align: right;
+}
+
+p { max-width: var(--measure); }
+
+/* --- KPI band ------------------------------------------------------------ */
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(178px, 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+}
+
+.kpi {
+  background: var(--surface);
+  padding: 20px 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kpi-label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.kpi-value {
+  font-family: var(--mono);
+  font-size: 34px;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.kpi-value.is-accent { color: var(--accent); }
+
+.kpi-sub {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.4;
+}
+
+/* --- figures -------------------------------------------------------------- */
+figure {
+  margin: 0;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  padding: 24px;
+}
+
+figure svg { max-width: 100%; height: auto; display: block; }
+
+figcaption {
+  font-size: 13px;
+  color: var(--ink-2);
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--rule);
+  max-width: var(--measure);
+}
+
+.scroll-x { overflow-x: auto; }
+
+/* --- SVG figure styling ---------------------------------------------------
+   Every fill/stroke below is a CSS class rather than a presentation attribute.
+   `var()` is only substituted in CSS declarations — fill="var(--x)" as an
+   attribute silently fails in Safari, which would render the diagram as solid
+   black shapes on a black ground in dark mode.
+   ------------------------------------------------------------------------- */
+figure svg { font-family: var(--mono); font-size: 12px; }
+
+.n-box    { fill: var(--surface); stroke: var(--ink); stroke-width: 1.5; }
+.n-title  { fill: var(--ink); font-weight: 600; }
+.n-sub    { fill: var(--ink-muted); font-size: 10.5px; }
+
+.flow     { stroke: var(--ink); stroke-width: 1.5; fill: none; }
+.flow-lbl { fill: var(--ink-muted); font-size: 10.5px; }
+
+.crit      { stroke: var(--critical); stroke-width: 1.5; fill: none; }
+.crit-dash { stroke-dasharray: 5 4; }
+.crit-box  { fill: var(--critical-soft); stroke: var(--critical); stroke-width: 1.5; }
+.crit-txt  { fill: var(--critical-text); }
+.crit-sub  { fill: var(--critical-text); font-size: 10.5px; }
+
+.head-arrow      { fill: var(--ink); }
+.head-arrow-crit { fill: var(--critical); }
+
+.grid  { stroke: var(--rule); stroke-width: 1; }
+.axis  { stroke: var(--rule-strong); stroke-width: 1; }
+.tick  { fill: var(--ink-muted); font-size: 10.5px; }
+
+.bar-loaded { fill: var(--accent); }
+.bar-quar   { fill: var(--critical); }
+.row-lbl    { fill: var(--ink-2); font-size: 11.5px; }
+.row-lbl-crit { fill: var(--critical-text); font-size: 11.5px; font-weight: 600; }
+.val-lbl    { fill: var(--ink-2); font-size: 11.5px; font-weight: 600; }
+.val-lbl-crit { fill: var(--critical-text); font-size: 11.5px; font-weight: 600; }
+
+/* --- legend --------------------------------------------------------------- */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin: 0 0 20px;
+  padding: 0;
+  list-style: none;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.legend li { display: flex; align-items: center; gap: 7px; }
+
+.swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex: none;
+}
+
+/* --- tables --------------------------------------------------------------- */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+caption {
+  text-align: left;
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--ink-2);
+  padding-bottom: 12px;
+}
+
+th, td {
+  text-align: right;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+}
+
+th:first-child, td:first-child { text-align: left; }
+th:nth-child(2), td:nth-child(2) { text-align: left; }
+
+thead th {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  font-weight: 600;
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+tbody tr.is-failed { background: var(--critical-soft); }
+
+td.status { text-align: left; }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+
+.pill.ok   { color: var(--good); }
+.pill.bad  { color: var(--critical-text); }
+
+.pill .dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor; flex: none;
+}
+
+/* --- incident ------------------------------------------------------------- */
+.incident {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+}
+
+.step {
+  background: var(--surface);
+  padding: 22px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.step-n {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--ink-muted);
+}
+
+.step h3 {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.step p { font-size: 13.5px; color: var(--ink-2); margin: 0; max-width: none; }
+
+.step.is-critical { border-top: 3px solid var(--critical); }
+.step.is-hold     { border-top: 3px solid var(--accent); }
+.step.is-good     { border-top: 3px solid var(--good); }
+
+/* --- disclosure band ------------------------------------------------------ */
+.disclosure {
+  background: var(--surface-sunk);
+  border: 1px solid var(--rule-strong);
+  border-left: 3px solid var(--ink-muted);
+  padding: 26px 28px;
+}
+
+.disclosure h2 { margin-bottom: 6px; }
+
+.disclosure dl { margin: 18px 0 0; display: grid; gap: 16px; }
+.disclosure dt {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-bottom: 3px;
+}
+.disclosure dd { margin: 0; font-size: 14px; color: var(--ink-2); max-width: var(--measure); }
+
+/* --- footer --------------------------------------------------------------- */
+footer {
+  margin-top: 72px;
+  padding-top: 24px;
+  border-top: 2px solid var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  justify-content: space-between;
+}
+
+a { color: var(--accent); }
+a:focus-visible,
+[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+
+@media (max-width: 620px) {
+  .masthead { padding-top: 36px; }
+  .section-note { margin-left: 0; text-align: left; width: 100%; }
+  .section-head { flex-wrap: wrap; gap: 6px; }
+}
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">Measured results · 9 runs · SQL Server 2022</p>
+    <h1>ETL Pipeline Run Ledger</h1>
+    <p class="standfirst">
+      A scheduled, self-validating pipeline moving sales data from an OLTP source into a
+      reporting warehouse. Every figure below was read out of the pipeline's own run log
+      after executing against a live database — none of it is estimated.
+    </p>
+    <ul class="provenance">
+      <li>AdventureWorks2022 · 31,465 orders</li>
+      <li>SQL Server 2022 · 16.0.4265.3</li>
+      <li>Azure Data Factory artifacts</li>
+      <li>Generated 2026-08-17 02:46 UTC</li>
+    </ul>
+  </header>
+
+  <!-- ================================================================== -->
+  <section>
+    <div class="section-head">
+      <h2>Headline</h2>
+      <p class="section-note">Source: <code>etl.etl_run_log</code>, <code>etl.etl_validation_log</code></p>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi">
+        <span class="kpi-label">Runs completed</span>
+        <span class="kpi-value">9</span>
+        <span class="kpi-sub">8 succeeded, 1 failed by design</span>
+      </div>
+      <div class="kpi">
+        <span class="kpi-label">No human involved</span>
+        <span class="kpi-value is-accent">88.9%</span>
+        <span class="kpi-sub">8 of 9 runs needed no intervention</span>
+      </div>
+      <div class="kpi">
+        <span class="kpi-label">Reconciliation</span>
+        <span class="kpi-value is-accent">100%</span>
+        <span class="kpi-sub">36 of 36 checks; zero unexplained variance</span>
+      </div>
+      <div class="kpi">
+        <span class="kpi-label">Rows loaded</span>
+        <span class="kpi-value">155,065</span>
+        <span class="kpi-sub">of 155,077 extracted · 12 quarantined</span>
+      </div>
+      <div class="kpi">
+        <span class="kpi-label">Checks executed</span>
+        <span class="kpi-value">324</span>
+        <span class="kpi-sub">321 passed · 3 caught injected faults</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================== -->
+  <section>
+    <div class="section-head">
+      <h2>How it moves</h2>
+      <p class="section-note">The mechanism that makes a failure survivable</p>
+    </div>
+
+    <figure>
+      <div class="scroll-x">
+        <svg viewBox="0 0 980 340" role="img"
+             aria-label="Pipeline flow: rows are extracted from AdventureWorks into staging, checked against 25 rules with failures diverted to quarantine, merged into the warehouse, then reconciled. On a critical failure the run is marked failed, an alert is raised, and the watermark is held so the same window is re-read on the next run.">
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path class="head-arrow" d="M 0 0 L 10 5 L 0 10 z"/>
+            </marker>
+            <marker id="ar-crit" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path class="head-arrow-crit" d="M 0 0 L 10 5 L 0 10 z"/>
+            </marker>
+          </defs>
+
+          <!-- main row -->
+          <g class="n-box">
+            <rect x="14"  y="48" width="150" height="56" rx="3"/>
+            <rect x="246" y="48" width="136" height="56" rx="3"/>
+            <rect x="454" y="48" width="136" height="56" rx="3"/>
+            <rect x="662" y="48" width="150" height="56" rx="3"/>
+          </g>
+
+          <g text-anchor="middle">
+            <text class="n-title" x="89"  y="72">Source OLTP</text>
+            <text class="n-sub"   x="89"  y="90">AdventureWorks</text>
+            <text class="n-title" x="314" y="72">Staging</text>
+            <text class="n-sub"   x="314" y="90">stg.*</text>
+            <text class="n-title" x="522" y="72">Warehouse</text>
+            <text class="n-sub"   x="522" y="90">dw.*</text>
+            <text class="n-title" x="737" y="72">Validation</text>
+            <text class="n-sub"   x="737" y="90">36 checks</text>
+          </g>
+
+          <!-- main flow arrows -->
+          <g class="flow" marker-end="url(#ar)">
+            <line x1="164" y1="76" x2="240" y2="76"/>
+            <line x1="382" y1="76" x2="448" y2="76"/>
+            <line x1="590" y1="76" x2="656" y2="76"/>
+          </g>
+          <g class="flow-lbl" text-anchor="middle">
+            <text x="202" y="66">extract Δ</text>
+            <text x="415" y="66">25 rules</text>
+            <text x="623" y="66">MERGE</text>
+          </g>
+
+          <!-- quarantine branch -->
+          <line class="crit" x1="314" y1="104" x2="314" y2="194" marker-end="url(#ar-crit)"/>
+          <text class="crit-sub" x="324" y="152">fails a rule</text>
+          <rect class="crit-box" x="228" y="196" width="176" height="52" rx="3"/>
+          <text class="crit-txt" x="316" y="218" text-anchor="middle" font-weight="600">Quarantine</text>
+          <text class="crit-sub" x="316" y="235" text-anchor="middle">row kept, not loaded</text>
+
+          <!-- validation fork -->
+          <path class="flow" d="M 737 104 L 737 160"/>
+          <path class="flow" d="M 737 160 L 903 160 L 903 194" marker-end="url(#ar)"/>
+          <path class="crit" d="M 737 160 L 590 160 L 590 194" marker-end="url(#ar-crit)"/>
+          <text class="flow-lbl" x="808" y="153" text-anchor="middle">all clear</text>
+          <text class="crit-sub" x="655" y="153" text-anchor="middle">critical fail</text>
+
+          <rect class="n-box" x="836" y="196" width="134" height="52" rx="3"/>
+          <text class="n-title" x="903" y="218" text-anchor="middle">Watermark</text>
+          <text class="n-sub"   x="903" y="235" text-anchor="middle">advanced</text>
+
+          <rect class="crit-box" x="474" y="196" width="232" height="52" rx="3"/>
+          <text class="crit-txt" x="590" y="218" text-anchor="middle" font-weight="600">Alert · run Failed</text>
+          <text class="crit-sub" x="590" y="235" text-anchor="middle">watermark HELD</text>
+
+          <!-- feedback: the held watermark re-reads the same window -->
+          <path class="crit crit-dash" d="M 474 222 L 440 222 L 440 300 L 89 300 L 89 110"
+                marker-end="url(#ar-crit)"/>
+          <text class="crit-sub" x="268" y="292" text-anchor="middle">
+            same window re-read next run — nothing is skipped
+          </text>
+        </svg>
+      </div>
+      <figcaption>
+        The dashed return path is the property the whole design rests on. Because the
+        watermark only advances after validation passes, a failed run re-reads its own
+        window on the next attempt. That turns a failure from data loss into a delay.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ================================================================== -->
+  <section>
+    <div class="section-head">
+      <h2>Rows per incremental run</h2>
+      <p class="section-note">Baseline full load charted separately — see below</p>
+    </div>
+
+    <ul class="legend">
+      <li><span class="swatch" style="background: var(--accent)"></span> Loaded into warehouse</li>
+      <li><span class="swatch" style="background: var(--critical)"></span> Quarantined — never loaded</li>
+    </ul>
+
+    <figure>
+      <div class="scroll-x">
+        <svg viewBox="0 0 900 306" role="img"
+             aria-label="Rows processed in each of the eight incremental runs. Runs 2 through 7 and run 9 loaded every row they extracted: 74, 229, 829, 70, 232, 837 and 12 rows respectively. Run 8 extracted 12 rows and loaded none — all 12 were quarantined.">
+
+          <!-- gridlines -->
+          <g class="grid">
+            <line x1="78"  y1="16" x2="78"  y2="262"/>
+            <line x1="226" y1="16" x2="226" y2="262"/>
+            <line x1="374" y1="16" x2="374" y2="262"/>
+            <line x1="522" y1="16" x2="522" y2="262"/>
+            <line x1="671" y1="16" x2="671" y2="262"/>
+          </g>
+          <g class="tick" text-anchor="middle">
+            <text x="78"  y="280">0</text>
+            <text x="226" y="280">200</text>
+            <text x="374" y="280">400</text>
+            <text x="522" y="280">600</text>
+            <text x="671" y="280">800</text>
+            <text x="374" y="298">rows</text>
+          </g>
+
+          <!-- baseline axis -->
+          <line class="axis" x1="78" y1="262" x2="820" y2="262"/>
+
+          <!-- run labels -->
+          <g text-anchor="end">
+            <text class="row-lbl"      x="66" y="34">Run 2</text>
+            <text class="row-lbl"      x="66" y="64">Run 3</text>
+            <text class="row-lbl"      x="66" y="94">Run 4</text>
+            <text class="row-lbl"      x="66" y="124">Run 5</text>
+            <text class="row-lbl"      x="66" y="154">Run 6</text>
+            <text class="row-lbl"      x="66" y="184">Run 7</text>
+            <text class="row-lbl-crit" x="66" y="214">Run 8</text>
+            <text class="row-lbl"      x="66" y="244">Run 9</text>
+          </g>
+
+          <g class="bar-loaded">
+            <rect x="78" y="22"  width="54.8"  height="14" rx="4"/>
+            <rect x="78" y="52"  width="169.6" height="14" rx="4"/>
+            <rect x="78" y="82"  width="614.1" height="14" rx="4"/>
+            <rect x="78" y="112" width="51.9"  height="14" rx="4"/>
+            <rect x="78" y="142" width="171.9" height="14" rx="4"/>
+            <rect x="78" y="172" width="620.0" height="14" rx="4"/>
+            <rect x="78" y="232" width="8.9"   height="14" rx="4"/>
+          </g>
+
+          <!-- run 8: everything quarantined, nothing loaded -->
+          <rect class="bar-quar" x="78" y="202" width="8.9" height="14" rx="4"/>
+
+          <g class="val-lbl">
+            <text x="142" y="34">74</text>
+            <text x="257" y="64">229</text>
+            <text x="702" y="94">829</text>
+            <text x="139" y="124">70</text>
+            <text x="259" y="154">232</text>
+            <text x="708" y="184">837</text>
+            <text x="96"  y="244">12</text>
+          </g>
+          <text class="val-lbl-crit" x="96" y="214">12 quarantined · 0 loaded</text>
+        </svg>
+      </div>
+      <figcaption>
+        The eight incremental runs. Run 8 is the fault-injection run: twelve deliberately
+        corrupted rows were extracted, all twelve were caught and held, and none reached
+        the warehouse. Run 9 re-read the same window and loaded them once the source was
+        repaired. The one-time baseline load — 152,782 rows in 73 s — is excluded here
+        because charting it alongside a 12-row batch would render every other bar invisible.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ================================================================== -->
+  <section>
+    <div class="section-head">
+      <h2>Run ledger</h2>
+      <p class="section-note">Every run, exactly as recorded</p>
+    </div>
+
+    <figure>
+      <div class="scroll-x">
+        <table>
+          <caption>All 9 runs. Run 1 is the one-time baseline full load; the rest are incremental.</caption>
+          <thead>
+            <tr>
+              <th scope="col">Run</th>
+              <th scope="col">Type</th>
+              <th scope="col">Extracted</th>
+              <th scope="col">Loaded</th>
+              <th scope="col">Quarantined</th>
+              <th scope="col">Checks</th>
+              <th scope="col">Failed</th>
+              <th scope="col">Seconds</th>
+              <th scope="col">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>Full</td><td>152,782</td><td>152,782</td><td>0</td><td>36</td><td>0</td><td>73.43</td>
+                <td class="status"><span class="pill ok"><span class="dot"></span>Succeeded</span></td></tr>
+            <tr><td>2</td><td>Incremental</td><td>74</td><td>74</td><td>0</td><td>36</td><td>0</td><td>0.48</td>
+                <td class="status"><span class="pill ok"><span class="dot"></span>Succeeded</span></td></tr>
+            <tr><td>3</td><td>Incremental</td><td>229</td><td>229</td><td>0</td><td>36</td><td>0</td><td>0.45</td>
+                <td class="status"><span class="pill ok"><span class="dot"></span>Succeeded</span></td></tr>
+            <tr><td>4</td><td>Incremental</td><td>829</td><td>829</td><td>0</td><td>36</td><td>0</td><td>0.79</td>
+                <td class="status"><span class="pill ok"><span class="dot"></span>Succeeded</span></td></tr>
+            <tr><td>5</td><td>Incremental</td><td>70</td><td>70</td><td>0</td><td>36</td><td>0</td><td>0.45</td>
+                <td class="status"><span class="pill ok"><span class="dot"></span>Succeeded</span></td></tr>
+            <tr><td>6</td><td>Incremental</td><td>232</td><td>232</td><td>0</td><td>36</td><td>0</td><td>0.39</td>
+                <td class="status"><span class="pill ok"><span class="dot"></span>Succeeded</span></td></tr>
+            <tr><td>7</td><td>Incremental</td><td>837</td><td>837</td><td>0</td><td>36</td><td>0</td><td>0.83</td>
+                <td class="status"><span class="pill ok"><span class="dot"></span>Succeeded</span></td></tr>
+            <tr class="is-failed"><td>8</td><td>Incremental</td><td>12</td><td>0</td><td>12</td><td>36</td><td>3</td><td>0.36</td>
+                <td class="status"><span class="pill bad"><span class="dot"></span>Failed</span></td></tr>
+            <tr><td>9</td><td>Incremental</td><td>12</td><td>12</td><td>0</td><td>36</td><td>0</td><td>0.25</td>
+                <td class="status"><span class="pill ok"><span class="dot"></span>Succeeded</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <figcaption>
+        Extracted always equals loaded plus quarantined — that identity is asserted by the
+        pipeline itself on every run, per table, and is what makes reconciliation exact
+        rather than approximate.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ================================================================== -->
+  <section>
+    <div class="section-head">
+      <h2>The incident</h2>
+      <p class="section-note">Deliberately induced, to prove the checks work</p>
+    </div>
+
+    <p style="margin-top: -8px; margin-bottom: 28px; color: var(--ink-2);">
+      A data-quality layer that has never rejected anything is an untested claim. So twelve
+      rows were corrupted at the source and the pipeline was left to find them.
+    </p>
+
+    <div class="incident">
+      <div class="step is-critical">
+        <span class="step-n">RUN 8</span>
+        <h3>Caught</h3>
+        <p>
+          Twelve corrupted headers extracted — orders due before they were placed, shipped
+          before ordered, carrying negative freight. Three Critical rules fired, one per
+          fault type. All twelve rows went to quarantine with the full row preserved as
+          JSON and the rule that caught it.
+        </p>
+      </div>
+      <div class="step is-hold">
+        <span class="step-n">RESPONSE</span>
+        <h3>Held</h3>
+        <p>
+          The run was marked <strong>Failed</strong> and an alert was raised and delivered.
+          Zero faulty rows reached the warehouse. Critically, the watermark was
+          <strong>not</strong> advanced — so the window stayed unread rather than being
+          stepped over.
+        </p>
+      </div>
+      <div class="step is-good">
+        <span class="step-n">RUN 9</span>
+        <h3>Recovered</h3>
+        <p>
+          Once the source was repaired, the next scheduled run re-read the identical window
+          and loaded all twelve rows. No replay was triggered, no backfill was scheduled and
+          nothing was lost — the recovery is a property of the design, not an intervention.
+        </p>
+      </div>
+    </div>
+
+    <figure style="margin-top: 28px;">
+      <div class="scroll-x">
+        <table>
+          <caption>What was quarantined, by the rule that caught it.</caption>
+          <thead>
+            <tr>
+              <th scope="col">Rule</th>
+              <th scope="col">Type</th>
+              <th scope="col">Entity</th>
+              <th scope="col">Rows held</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>DATE_DueBeforeOrder</td><td>DomainCheck</td><td>SalesOrderHeader</td><td>4</td></tr>
+            <tr><td>DATE_ShipBeforeOrder</td><td>DomainCheck</td><td>SalesOrderHeader</td><td>4</td></tr>
+            <tr><td>NEG_Amounts</td><td>DomainCheck</td><td>SalesOrderHeader</td><td>4</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <figcaption>
+        AdventureWorks will not accept these faults on its own — its CHECK constraints reject
+        all three. The harness disables them for the injection and re-enables them
+        <code>WITH CHECK</code> afterwards, simulating a source with weaker guarantees than
+        this one: a legacy system, a third-party feed, a replica loaded in bulk.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ================================================================== -->
+  <section>
+    <div class="disclosure">
+      <h2>What these numbers do not claim</h2>
+      <p style="font-size: 14px; color: var(--ink-2); margin: 10px 0 0;">
+        Stated up front, because a dashboard is exactly where an unearned number would hide.
+      </p>
+
+      <dl>
+        <div>
+          <dt>No manual-process baseline exists.</dt>
+          <dd>
+            The manual export-and-load this replaces was never performed or timed, so no
+            "reduced manual effort by N%" figure can honestly be derived — and none is
+            reported. The metrics module has no code path that can produce one.
+          </dd>
+        </div>
+        <div>
+          <dt>99.992% is completeness, not semantic accuracy.</dt>
+          <dd>
+            It means every extracted row was either loaded or deliberately quarantined.
+            Verifying semantic correctness would need a reference dataset to compare the
+            warehouse against; no such comparison was made.
+          </dd>
+        </div>
+        <div>
+          <dt>Azure Data Factory was never deployed.</dt>
+          <dd>
+            The ADF pipelines, Logic App, Monitor rules and Bicep templates are written
+            against the documented 2024 API versions and call the same stored procedures
+            these runs exercised — but every measured run was driven by the local Python
+            runner, not by ADF.
+          </dd>
+        </div>
+        <div>
+          <dt>There is no SSIS here.</dt>
+          <dd>
+            The scope permitted either SSIS or an ADF-native build. This is ADF-native: no
+            <code>.dtsx</code> package, no SSIS Integration Runtime, and no SSIS claim
+            anywhere in the repository.
+          </dd>
+        </div>
+        <div>
+          <dt>Arrival patterns are simulated.</dt>
+          <dd>
+            AdventureWorks is a static sample database, so order activity between runs was
+            generated against the <em>source</em> and discovered by the pipeline through its
+            own watermark. The rows are real rows that really moved; what is synthetic is the
+            timing, not the processing.
+          </dd>
+        </div>
+      </dl>
+    </div>
+  </section>
+
+  <!-- ================================================================== -->
+  <section>
+    <div class="section-head">
+      <h2>Built with</h2>
+      <p class="section-note">41 integration tests against a live database</p>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi">
+        <span class="kpi-label">Source &amp; target</span>
+        <span class="kpi-sub" style="font-size:13.5px">SQL Server 2022 · Azure SQL Database</span>
+      </div>
+      <div class="kpi">
+        <span class="kpi-label">Orchestration</span>
+        <span class="kpi-sub" style="font-size:13.5px">Azure Data Factory — Copy, Lookup, Stored Procedure, If Condition, Execute Pipeline, Web</span>
+      </div>
+      <div class="kpi">
+        <span class="kpi-label">Alerting</span>
+        <span class="kpi-sub" style="font-size:13.5px">Logic Apps · Azure Monitor metric alerts</span>
+      </div>
+      <div class="kpi">
+        <span class="kpi-label">Secrets</span>
+        <span class="kpi-sub" style="font-size:13.5px">Key Vault via system-assigned managed identity</span>
+      </div>
+      <div class="kpi">
+        <span class="kpi-label">Infrastructure</span>
+        <span class="kpi-sub" style="font-size:13.5px">Bicep · Azure CLI 2.58–2.60 · PowerShell 7.4</span>
+      </div>
+      <div class="kpi">
+        <span class="kpi-label">Runner &amp; tests</span>
+        <span class="kpi-sub" style="font-size:13.5px">Python 3.11+ · pyodbc · pytest</span>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>ETL Data Automation Pipeline · personal project</span>
+    <span>Regenerate: <code>python -m etl.metrics --write</code></span>
+  </footer>
+
+</div>

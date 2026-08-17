@@ -244,6 +244,15 @@ reports/                          Generated metrics — regenerate, don't edit
 
 ---
 
+## Dashboard
+
+[**`DASHBOARD.md`**](DASHBOARD.md) — the measured results with diagrams and the full
+run ledger, rendered inline by GitHub. A richer version with proper charts and both
+themes is in [`github-pages/index.html`](github-pages/index.html), ready to publish
+with GitHub Pages (Settings → Pages → Deploy from branch → `/github-pages`).
+
+---
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — how it works, for a
