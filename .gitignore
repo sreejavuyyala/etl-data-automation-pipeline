@@ -46,7 +46,6 @@ data/*.ldf
 #  written during a run are not: they are per-run artifacts.
 # =============================================================================
 reports/alerts/*.json
-reports/evidence/*.tmp
 logs/
 *.log
 
