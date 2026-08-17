@@ -1,0 +1,117 @@
+# =============================================================================
+#  Secrets -- never commit these.
+#
+#  The deployed pipeline reads its connection strings from Azure Key Vault via
+#  managed identity; .env is the local-development equivalent and holds real
+#  passwords. .env.example is committed and holds none.
+# =============================================================================
+.env
+.env.*
+!.env.example
+*.pfx
+*.key
+*.pem
+*.publishsettings
+appsettings.local.json
+local.settings.json
+secrets.json
+
+# Azure CLI / PowerShell credential caches
+.azure/
+*.azurePubxml
+azureauth.json
+
+# ADF publish artifacts can embed resolved connection strings
+adf/**/PublishedArtifacts/
+adf/**/*.publish.json
+ARMTemplateParametersForFactory.json
+
+
+# =============================================================================
+#  Sample data -- downloaded at setup time, not redistributed.
+#  AdventureWorks2022.bak is ~200 MB and belongs to Microsoft.
+# =============================================================================
+data/backup/*.bak
+data/backup/*.bacpac
+data/backup/*.zip
+data/*.mdf
+data/*.ldf
+
+
+# =============================================================================
+#  Generated output
+#
+#  reports/metrics.{md,json} ARE committed -- they are the measured evidence the
+#  README cites, and regenerating them requires a live database. Alert payloads
+#  written during a run are not: they are per-run artifacts.
+# =============================================================================
+reports/alerts/*.json
+reports/evidence/*.tmp
+logs/
+*.log
+
+
+# =============================================================================
+#  Build output (SSDT / .NET, present if anyone opens this in Visual Studio)
+# =============================================================================
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.dtsx.user
+*.database.user
+*.dtproj.user
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+*.dbmdl
+*.jfm
+
+
+# =============================================================================
+#  Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+eggs/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.etlvenv/
+
+# Test and type-checker caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+
+
+# =============================================================================
+#  Editors and OS
+# =============================================================================
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

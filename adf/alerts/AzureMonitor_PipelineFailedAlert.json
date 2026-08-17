@@ -1,0 +1,128 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "metadata": {
+        "description": "Azure Monitor alert rule that fires when the Sales ETL pipeline fails in Azure Data Factory. This is the outer safety net, and it catches a case the in-pipeline alerting cannot: if the pipeline dies before reaching its own error handler -- the Integration Runtime is unavailable, the factory cannot reach Key Vault, the run is cancelled -- then no Web activity ever executes and no row is ever written to etl.etl_alert. Azure Monitor watches the platform's own PipelineFailedRuns metric, so it fires regardless of how far the pipeline got."
+    },
+    "parameters": {
+        "dataFactoryName": {
+            "type": "string",
+            "defaultValue": "adf-etl-salesdw",
+            "metadata": {
+                "description": "Name of the data factory to watch."
+            }
+        },
+        "actionGroupId": {
+            "type": "string",
+            "metadata": {
+                "description": "Resource id of the action group to notify. Deploy LogicApp_EtlFailureNotification.json first and pass the action group it creates."
+            }
+        },
+        "location": {
+            "type": "string",
+            "defaultValue": "[resourceGroup().location]"
+        }
+    },
+    "variables": {
+        "alertName": "[concat(parameters('dataFactoryName'), '-pipeline-failed')]",
+        "dataFactoryId": "[resourceId('Microsoft.DataFactory/factories', parameters('dataFactoryName'))]"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Insights/metricAlerts",
+            "apiVersion": "2018-03-01",
+            "name": "[variables('alertName')]",
+            "location": "global",
+            "properties": {
+                "description": "One or more Sales ETL pipeline runs failed.",
+                "severity": 1,
+                "enabled": true,
+                "scopes": [
+                    "[variables('dataFactoryId')]"
+                ],
+                "evaluationFrequency": "PT5M",
+                "windowSize": "PT15M",
+                "criteria": {
+                    "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+                    "allOf": [
+                        {
+                            "name": "PipelineFailedRuns",
+                            "metricNamespace": "Microsoft.DataFactory/factories",
+                            "metricName": "PipelineFailedRuns",
+                            "dimensions": [
+                                {
+                                    "name": "Name",
+                                    "operator": "Include",
+                                    "values": [
+                                        "LoadSalesData_Pipeline"
+                                    ]
+                                }
+                            ],
+                            "operator": "GreaterThan",
+                            "threshold": 0,
+                            "timeAggregation": "Total",
+                            "criterionType": "StaticThresholdCriterion"
+                        }
+                    ]
+                },
+                "autoMitigate": true,
+                "actions": [
+                    {
+                        "actionGroupId": "[parameters('actionGroupId')]"
+                    }
+                ]
+            }
+        },
+        {
+            "type": "Microsoft.Insights/metricAlerts",
+            "apiVersion": "2018-03-01",
+            "name": "[concat(parameters('dataFactoryName'), '-pipeline-missed')]",
+            "location": "global",
+            "properties": {
+                "description": "The Sales ETL pipeline has not run successfully in over 26 hours. Catches the failure mode no failure alert can: the trigger stopped firing, so there is nothing to fail. A silent pipeline looks identical to a healthy one until somebody notices the reports are stale.",
+                "severity": 2,
+                "enabled": true,
+                "scopes": [
+                    "[variables('dataFactoryId')]"
+                ],
+                "evaluationFrequency": "PT1H",
+                "windowSize": "PT6H",
+                "criteria": {
+                    "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+                    "allOf": [
+                        {
+                            "name": "PipelineSucceededRuns",
+                            "metricNamespace": "Microsoft.DataFactory/factories",
+                            "metricName": "PipelineSucceededRuns",
+                            "dimensions": [
+                                {
+                                    "name": "Name",
+                                    "operator": "Include",
+                                    "values": [
+                                        "LoadSalesData_Pipeline"
+                                    ]
+                                }
+                            ],
+                            "operator": "LessThanOrEqual",
+                            "threshold": 0,
+                            "timeAggregation": "Total",
+                            "criterionType": "StaticThresholdCriterion"
+                        }
+                    ]
+                },
+                "autoMitigate": true,
+                "actions": [
+                    {
+                        "actionGroupId": "[parameters('actionGroupId')]"
+                    }
+                ]
+            }
+        }
+    ],
+    "outputs": {
+        "failureAlertId": {
+            "type": "string",
+            "value": "[resourceId('Microsoft.Insights/metricAlerts', variables('alertName'))]"
+        }
+    }
+}

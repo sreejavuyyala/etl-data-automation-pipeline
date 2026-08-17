@@ -1,0 +1,27 @@
+# -----------------------------------------------------------------------------
+#  Runtime
+# -----------------------------------------------------------------------------
+# ODBC driver bindings. Requires "ODBC Driver 18 for SQL Server" to be installed
+# on the machine -- pip cannot supply it. See docs/runbook.md.
+pyodbc>=5.1,<6.0
+
+# -----------------------------------------------------------------------------
+#  Development and test
+# -----------------------------------------------------------------------------
+# The test suite is integration-level: it runs against the live SQL Server
+# instance from .env. There are no mocks, because the code under test is SQL --
+# a mocked database would only prove the mock behaves like the mock.
+pytest>=8.0,<9.0
+
+# -----------------------------------------------------------------------------
+#  Deliberately absent
+# -----------------------------------------------------------------------------
+# python-dotenv  -- etl/config.py parses .env in ~20 lines, and the shell scripts
+#                   in scripts/ have to source the same file anyway.
+# pandas         -- the pipeline streams rows through pyodbc in batches. Loading
+#                   121,000 rows into a DataFrame to hand them straight back to
+#                   an INSERT would add a dependency and a memory ceiling to buy
+#                   nothing.
+# azure-*        -- nothing here talks to Azure at runtime. Deployment is the az
+#                   CLI and Bicep; the factory authenticates as itself via
+#                   managed identity.

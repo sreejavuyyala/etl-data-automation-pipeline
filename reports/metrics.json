@@ -1,0 +1,195 @@
+{
+  "generated_at_utc": "2026-08-17T02:46:45+00:00",
+  "total_runs": 9,
+  "scheduled_runs": 9,
+  "succeeded": 8,
+  "completed_with_warnings": 0,
+  "failed": 1,
+  "runs_requiring_manual_intervention": 1,
+  "autonomous_run_rate_pct": 88.8889,
+  "rows_extracted": 155077,
+  "rows_loaded": 155065,
+  "rows_quarantined": 12,
+  "row_load_rate_pct": 99.9923,
+  "checks_executed": 324,
+  "checks_passed": 321,
+  "checks_failed": 3,
+  "check_pass_rate_pct": 99.0741,
+  "critical_checks_failed": 3,
+  "reconciliation_checks": 36,
+  "reconciliation_passed": 36,
+  "reconciliation_pass_rate_pct": 100.0,
+  "row_count_variance_total": 0,
+  "alerts_raised": 1,
+  "alerts_delivered": 1,
+  "total_runtime_seconds": 77.424,
+  "median_run_seconds": 0.451,
+  "slowest_run_seconds": 73.425,
+  "warehouse_orders": 31899,
+  "warehouse_order_lines": 122642,
+  "failed_check_breakdown": [
+    {
+      "check_name": "DATE_DueBeforeOrder",
+      "check_type": "DomainCheck",
+      "severity": "Critical",
+      "occurrences": 1
+    },
+    {
+      "check_name": "DATE_ShipBeforeOrder",
+      "check_type": "DomainCheck",
+      "severity": "Critical",
+      "occurrences": 1
+    },
+    {
+      "check_name": "NEG_Amounts",
+      "check_type": "DomainCheck",
+      "severity": "Critical",
+      "occurrences": 1
+    }
+  ],
+  "quarantine_breakdown": [
+    {
+      "entity_name": "SalesOrderHeader",
+      "rejection_reason": "DATE_DueBeforeOrder",
+      "rows_quarantined": 4
+    },
+    {
+      "entity_name": "SalesOrderHeader",
+      "rejection_reason": "DATE_ShipBeforeOrder",
+      "rows_quarantined": 4
+    },
+    {
+      "entity_name": "SalesOrderHeader",
+      "rejection_reason": "NEG_Amounts",
+      "rows_quarantined": 4
+    }
+  ],
+  "runs": [
+    {
+      "run_id": 1,
+      "run_trigger": "Scheduled",
+      "load_type": "Full",
+      "status": "Succeeded",
+      "rows_extracted": 152782,
+      "rows_loaded": 152782,
+      "rows_rejected": 0,
+      "checks_run": 36,
+      "checks_failed": 0,
+      "required_manual_intervention": false,
+      "duration_seconds": "73.425",
+      "start_time": "2026-08-17 02:45:06.546000"
+    },
+    {
+      "run_id": 2,
+      "run_trigger": "Scheduled",
+      "load_type": "Incremental",
+      "status": "Succeeded",
+      "rows_extracted": 74,
+      "rows_loaded": 74,
+      "rows_rejected": 0,
+      "checks_run": 36,
+      "checks_failed": 0,
+      "required_manual_intervention": false,
+      "duration_seconds": "0.479",
+      "start_time": "2026-08-17 02:46:21.115000"
+    },
+    {
+      "run_id": 3,
+      "run_trigger": "Scheduled",
+      "load_type": "Incremental",
+      "status": "Succeeded",
+      "rows_extracted": 229,
+      "rows_loaded": 229,
+      "rows_rejected": 0,
+      "checks_run": 36,
+      "checks_failed": 0,
+      "required_manual_intervention": false,
+      "duration_seconds": "0.450",
+      "start_time": "2026-08-17 02:46:23.428000"
+    },
+    {
+      "run_id": 4,
+      "run_trigger": "Scheduled",
+      "load_type": "Incremental",
+      "status": "Succeeded",
+      "rows_extracted": 829,
+      "rows_loaded": 829,
+      "rows_rejected": 0,
+      "checks_run": 36,
+      "checks_failed": 0,
+      "required_manual_intervention": false,
+      "duration_seconds": "0.789",
+      "start_time": "2026-08-17 02:46:29.477000"
+    },
+    {
+      "run_id": 5,
+      "run_trigger": "Scheduled",
+      "load_type": "Incremental",
+      "status": "Succeeded",
+      "rows_extracted": 70,
+      "rows_loaded": 70,
+      "rows_rejected": 0,
+      "checks_run": 36,
+      "checks_failed": 0,
+      "required_manual_intervention": false,
+      "duration_seconds": "0.451",
+      "start_time": "2026-08-17 02:46:30.802000"
+    },
+    {
+      "run_id": 6,
+      "run_trigger": "Scheduled",
+      "load_type": "Incremental",
+      "status": "Succeeded",
+      "rows_extracted": 232,
+      "rows_loaded": 232,
+      "rows_rejected": 0,
+      "checks_run": 36,
+      "checks_failed": 0,
+      "required_manual_intervention": false,
+      "duration_seconds": "0.394",
+      "start_time": "2026-08-17 02:46:32.940000"
+    },
+    {
+      "run_id": 7,
+      "run_trigger": "Scheduled",
+      "load_type": "Incremental",
+      "status": "Succeeded",
+      "rows_extracted": 837,
+      "rows_loaded": 837,
+      "rows_rejected": 0,
+      "checks_run": 36,
+      "checks_failed": 0,
+      "required_manual_intervention": false,
+      "duration_seconds": "0.830",
+      "start_time": "2026-08-17 02:46:38.768000"
+    },
+    {
+      "run_id": 8,
+      "run_trigger": "Scheduled",
+      "load_type": "Incremental",
+      "status": "Failed",
+      "rows_extracted": 12,
+      "rows_loaded": 0,
+      "rows_rejected": 12,
+      "checks_run": 36,
+      "checks_failed": 3,
+      "required_manual_intervention": true,
+      "duration_seconds": "0.360",
+      "start_time": "2026-08-17 02:46:39.785000"
+    },
+    {
+      "run_id": 9,
+      "run_trigger": "Scheduled",
+      "load_type": "Incremental",
+      "status": "Succeeded",
+      "rows_extracted": 12,
+      "rows_loaded": 12,
+      "rows_rejected": 0,
+      "checks_run": 36,
+      "checks_failed": 0,
+      "required_manual_intervention": false,
+      "duration_seconds": "0.246",
+      "start_time": "2026-08-17 02:46:40.239000"
+    }
+  ]
+}

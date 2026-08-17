@@ -1,0 +1,252 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "metadata": {
+        "description": "Logic App that receives an ETL failure payload over HTTPS and fans it out to email and Teams, plus the action group Azure Monitor notifies. The pipeline POSTs here from its Web activity; the local runner in etl/ POSTs the identical payload, so one endpoint serves both orchestrators."
+    },
+    "parameters": {
+        "logicAppName": {
+            "type": "string",
+            "defaultValue": "logic-etl-alerts"
+        },
+        "actionGroupName": {
+            "type": "string",
+            "defaultValue": "ag-etl-alerts"
+        },
+        "notificationEmail": {
+            "type": "string",
+            "metadata": {
+                "description": "Address to notify on failure."
+            }
+        },
+        "teamsWebhookUrl": {
+            "type": "securestring",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Optional Teams incoming-webhook URL. Leave empty to skip the Teams step. Secure because the URL is itself the credential."
+            }
+        },
+        "location": {
+            "type": "string",
+            "defaultValue": "[resourceGroup().location]"
+        }
+    },
+    "variables": {
+        "postTeams": "[not(empty(parameters('teamsWebhookUrl')))]"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2019-05-01",
+            "name": "[parameters('logicAppName')]",
+            "location": "[parameters('location')]",
+            "properties": {
+                "state": "Enabled",
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "notificationEmail": {
+                            "type": "String"
+                        },
+                        "teamsWebhookUrl": {
+                            "type": "SecureString"
+                        },
+                        "postTeams": {
+                            "type": "Bool"
+                        }
+                    },
+                    "triggers": {
+                        "When_an_ETL_alert_is_received": {
+                            "type": "Request",
+                            "kind": "Http",
+                            "inputs": {
+                                "method": "POST",
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "alertType": {
+                                            "type": "string"
+                                        },
+                                        "severity": {
+                                            "type": "string"
+                                        },
+                                        "subject": {
+                                            "type": "string"
+                                        },
+                                        "runId": {
+                                            "type": [
+                                                "integer",
+                                                "null"
+                                            ]
+                                        },
+                                        "pipeline": {
+                                            "type": "string"
+                                        },
+                                        "raisedAtUtc": {
+                                            "type": "string"
+                                        },
+                                        "details": {
+                                            "type": "object"
+                                        }
+                                    },
+                                    "required": [
+                                        "alertType",
+                                        "severity",
+                                        "subject"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "actions": {
+                        "Compose_message": {
+                            "type": "Compose",
+                            "runAfter": {},
+                            "inputs": {
+                                "title": "@{triggerBody()?['subject']}",
+                                "severity": "@{triggerBody()?['severity']}",
+                                "alertType": "@{triggerBody()?['alertType']}",
+                                "runId": "@{triggerBody()?['runId']}",
+                                "pipeline": "@{triggerBody()?['pipeline']}",
+                                "raisedAtUtc": "@{triggerBody()?['raisedAtUtc']}",
+                                "detail": "@{string(triggerBody()?['details'])}"
+                            }
+                        },
+                        "Send_email": {
+                            "type": "ApiConnection",
+                            "runAfter": {
+                                "Compose_message": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['office365']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "path": "/v2/Mail",
+                                "body": {
+                                    "To": "@parameters('notificationEmail')",
+                                    "Subject": "[@{triggerBody()?['severity']}] @{triggerBody()?['subject']}",
+                                    "Body": "<p><strong>@{triggerBody()?['subject']}</strong></p><p>Pipeline: @{triggerBody()?['pipeline']}<br/>Run id: @{triggerBody()?['runId']}<br/>Raised: @{triggerBody()?['raisedAtUtc']}</p><pre>@{string(triggerBody()?['details'])}</pre><p>Investigate with:<br/><code>SELECT * FROM etl.vw_RunSummary WHERE run_id = @{triggerBody()?['runId']};</code><br/><code>SELECT * FROM etl.etl_validation_log WHERE run_id = @{triggerBody()?['runId']} AND status = 'FAIL';</code></p>",
+                                    "Importance": "High"
+                                }
+                            }
+                        },
+                        "Post_to_Teams": {
+                            "type": "Http",
+                            "runAfter": {
+                                "Compose_message": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "inputs": {
+                                "method": "POST",
+                                "uri": "@parameters('teamsWebhookUrl')",
+                                "headers": {
+                                    "Content-Type": "application/json"
+                                },
+                                "body": {
+                                    "@@type": "MessageCard",
+                                    "@@context": "https://schema.org/extensions",
+                                    "themeColor": "D93025",
+                                    "summary": "@{triggerBody()?['subject']}",
+                                    "title": "@{triggerBody()?['subject']}",
+                                    "sections": [
+                                        {
+                                            "facts": [
+                                                {
+                                                    "name": "Pipeline",
+                                                    "value": "@{triggerBody()?['pipeline']}"
+                                                },
+                                                {
+                                                    "name": "Run id",
+                                                    "value": "@{string(triggerBody()?['runId'])}"
+                                                },
+                                                {
+                                                    "name": "Severity",
+                                                    "value": "@{triggerBody()?['severity']}"
+                                                },
+                                                {
+                                                    "name": "Raised (UTC)",
+                                                    "value": "@{triggerBody()?['raisedAtUtc']}"
+                                                }
+                                            ],
+                                            "text": "@{string(triggerBody()?['details'])}"
+                                        }
+                                    ]
+                                }
+                            },
+                            "runtimeConfiguration": {
+                                "staticResult": {
+                                    "staticResultOptions": "Disabled"
+                                }
+                            },
+                            "expression": "@parameters('postTeams')"
+                        },
+                        "Respond_200": {
+                            "type": "Response",
+                            "kind": "Http",
+                            "runAfter": {
+                                "Send_email": [
+                                    "Succeeded",
+                                    "Failed",
+                                    "Skipped"
+                                ]
+                            },
+                            "inputs": {
+                                "statusCode": 200,
+                                "body": {
+                                    "accepted": true,
+                                    "runId": "@{triggerBody()?['runId']}"
+                                }
+                            }
+                        }
+                    },
+                    "outputs": {}
+                },
+                "parameters": {
+                    "notificationEmail": {
+                        "value": "[parameters('notificationEmail')]"
+                    },
+                    "teamsWebhookUrl": {
+                        "value": "[parameters('teamsWebhookUrl')]"
+                    },
+                    "postTeams": {
+                        "value": "[variables('postTeams')]"
+                    }
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Insights/actionGroups",
+            "apiVersion": "2023-01-01",
+            "name": "[parameters('actionGroupName')]",
+            "location": "global",
+            "properties": {
+                "groupShortName": "etlalerts",
+                "enabled": true,
+                "emailReceivers": [
+                    {
+                        "name": "etl-owner",
+                        "emailAddress": "[parameters('notificationEmail')]",
+                        "useCommonAlertSchema": true
+                    }
+                ]
+            }
+        }
+    ],
+    "outputs": {
+        "actionGroupId": {
+            "type": "string",
+            "value": "[resourceId('Microsoft.Insights/actionGroups', parameters('actionGroupName'))]"
+        },
+        "logicAppCallbackUrlNote": {
+            "type": "string",
+            "value": "Retrieve with: az rest --method post --uri \"<logicAppResourceId>/triggers/When_an_ETL_alert_is_received/listCallbackUrl?api-version=2019-05-01\" --query value -o tsv  --  then store it in Key Vault as 'etl-alert-logicapp-url'. The URL embeds a SAS signature: treat it as a secret and never commit it."
+        }
+    }
+}

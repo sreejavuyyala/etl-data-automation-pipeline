@@ -1,0 +1,69 @@
+# =============================================================================
+#  Local SQL Server 2022 for developing and running the pipeline.
+#
+#  This stands up the *database side* of the architecture on a laptop: one
+#  SQL Server 2022 instance hosting both the AdventureWorks2022 source and the
+#  SalesReportingDW target. In the deployed topology those are two separate
+#  Azure SQL databases; keeping them as two databases on one instance here
+#  preserves the thing that matters -- the pipeline never assumes it can see
+#  across from target to source, and row-count reconciliation still has to ask
+#  the source for its own count.
+#
+#  Apple Silicon note: mcr.microsoft.com/mssql/server has no arm64 build, so
+#  `platform: linux/amd64` runs it under Rosetta translation. It works, and it
+#  is a genuine SQL Server 2022 engine, but expect roughly 2-4x the CPU time of
+#  a native build. Enable Rosetta in Docker Desktop:
+#     Settings -> General -> "Use Rosetta for x86_64/amd64 emulation"
+#
+#  Usage:
+#     cp .env.example .env          # then edit MSSQL_SA_PASSWORD
+#     docker compose up -d
+#     ./scripts/restore_adventureworks.sh
+#     ./scripts/deploy_schema.sh
+# =============================================================================
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    container_name: etl-sqlserver
+    hostname: etl-sqlserver
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:?MSSQL_SA_PASSWORD must be set -- copy .env.example to .env and set it}"
+      # Developer edition: full Enterprise feature set, licensed for non-production use.
+      MSSQL_PID: "Developer"
+      # Cap the engine well below the Docker VM's allocation. SQL Server will
+      # otherwise size its buffer pool against the whole VM and leave nothing
+      # for the restore process, which is what makes an under-provisioned
+      # container die partway through RESTORE DATABASE rather than at startup.
+      MSSQL_MEMORY_LIMIT_MB: "${MSSQL_MEMORY_LIMIT_MB:-2560}"
+      MSSQL_COLLATION: "SQL_Latin1_General_CP1_CI_AS"
+      TZ: "UTC"
+    ports:
+      - "${MSSQL_HOST_PORT:-1433}:1433"
+    volumes:
+      - mssql-data:/var/opt/mssql
+      # Landing spot for the AdventureWorks .bak, mounted rather than copied so
+      # a 50MB backup file is not baked into an image layer.
+      - ./data/backup:/var/opt/mssql/backup
+    healthcheck:
+      # /opt/mssql-tools18/bin/sqlcmd is the SQL Server 2022 image path
+      # (mssql-tools18 replaced mssql-tools). -C trusts the self-signed
+      # certificate the container generates for itself.
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' -b -o /dev/null"
+        ]
+      interval: 10s
+      timeout: 10s
+      # Generous: first boot under emulation has to create the system databases
+      # before it will answer a query at all.
+      retries: 30
+      start_period: 90s
+    restart: unless-stopped
+
+volumes:
+  mssql-data:
+    driver: local

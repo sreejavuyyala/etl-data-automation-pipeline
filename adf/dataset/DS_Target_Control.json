@@ -1,0 +1,20 @@
+{
+    "name": "DS_Target_Control",
+    "type": "Microsoft.DataFactory/factories/datasets",
+    "properties": {
+        "description": "Binding dataset for Lookup and Stored Procedure activities against SalesReportingDW. Lookup activities require a dataset even when the payload is a stored procedure call, so this points at etl.etl_run_log and is never actually read as a table.",
+        "linkedServiceName": {
+            "referenceName": "LS_SalesReportingDW_Target",
+            "type": "LinkedServiceReference"
+        },
+        "annotations": [
+            "control"
+        ],
+        "type": "AzureSqlTable",
+        "schema": [],
+        "typeProperties": {
+            "schema": "etl",
+            "table": "etl_run_log"
+        }
+    }
+}

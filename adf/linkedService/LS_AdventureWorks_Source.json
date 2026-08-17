@@ -1,0 +1,29 @@
+{
+    "name": "LS_AdventureWorks_Source",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "description": "Source OLTP system: the AdventureWorks2022 sample database. Read-only -- the pipeline never writes here. The connection string is resolved at runtime from Key Vault so that neither the repository nor the factory's published JSON contains a server name or credential.",
+        "annotations": [
+            "source",
+            "oltp"
+        ],
+        "type": "AzureSqlDatabase",
+        "typeProperties": {
+            "connectionString": {
+                "type": "AzureKeyVaultSecret",
+                "store": {
+                    "referenceName": "LS_KeyVault",
+                    "type": "LinkedServiceReference",
+                    "parameters": {
+                        "keyVaultName": "kv-etl-salesdw"
+                    }
+                },
+                "secretName": "adventureworks-source-connectionstring"
+            }
+        },
+        "connectVia": {
+            "referenceName": "AutoResolveIntegrationRuntime",
+            "type": "IntegrationRuntimeReference"
+        }
+    }
+}

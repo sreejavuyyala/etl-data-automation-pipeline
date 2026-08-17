@@ -1,0 +1,42 @@
+{
+    "name": "TR_LoadSalesData_Daily_0200",
+    "type": "Microsoft.DataFactory/factories/triggers",
+    "properties": {
+        "description": "Daily schedule for the Sales ETL. Fires at 02:00 UTC, which is after the AdventureWorks Cycles order-entry system's nightly close and well before the reporting day starts -- the window the manual export-and-load process used to occupy. A schedule trigger rather than a tumbling-window trigger because the pipeline manages its own incremental window through etl.etl_watermark: it always reads from wherever the last successful run stopped, so a missed or failed occurrence is picked up by the next one rather than needing a backfill.",
+        "annotations": [
+            "sales",
+            "etl",
+            "daily"
+        ],
+        "runtimeState": "Stopped",
+        "pipelines": [
+            {
+                "pipelineReference": {
+                    "referenceName": "LoadSalesData_Pipeline",
+                    "type": "PipelineReference"
+                },
+                "parameters": {
+                    "runTrigger": "Scheduled",
+                    "loadType": "Incremental"
+                }
+            }
+        ],
+        "type": "ScheduleTrigger",
+        "typeProperties": {
+            "recurrence": {
+                "frequency": "Day",
+                "interval": 1,
+                "startTime": "2024-05-01T02:00:00Z",
+                "timeZone": "UTC",
+                "schedule": {
+                    "minutes": [
+                        0
+                    ],
+                    "hours": [
+                        2
+                    ]
+                }
+            }
+        }
+    }
+}

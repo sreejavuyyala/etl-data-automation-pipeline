@@ -1,0 +1,51 @@
+{
+    "name": "ValidateSalesData_Pipeline",
+    "type": "Microsoft.DataFactory/factories/pipelines",
+    "properties": {
+        "description": "Post-load validation. A single Stored Procedure activity, because the checks themselves live in SQL -- row-count reconciliation, referential integrity, header-versus-lines financial reconciliation, warehouse domain assertions and pipeline-lag freshness. Keeping them there rather than as a dozen ADF activities means the local runner in etl/ executes exactly the same checks, and that adding a check is an INSERT into etl.etl_validation_rule rather than a pipeline redeployment.",
+        "parameters": {
+            "runId": {
+                "type": "int"
+            }
+        },
+        "activities": [
+            {
+                "name": "ValidateSalesData",
+                "description": "Runs every post-load check and writes each result to etl.etl_validation_log. Source row counts default to the values the extract stage recorded in etl.etl_run_entity, so the source is counted once, during extraction, rather than being re-queried here -- by which point the answer could legitimately have changed.",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:30:00",
+                    "retry": 1,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "linkedServiceName": {
+                    "referenceName": "LS_SalesReportingDW_Target",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[etl].[usp_ValidateSalesData]",
+                    "storedProcedureParameters": {
+                        "run_id": {
+                            "value": {
+                                "value": "@pipeline().parameters.runId",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        }
+                    }
+                }
+            }
+        ],
+        "annotations": [
+            "sales",
+            "etl",
+            "validation"
+        ],
+        "folder": {
+            "name": "SalesETL"
+        }
+    }
+}

@@ -1,0 +1,488 @@
+{
+    "name": "LoadSalesData_Extract_Pipeline",
+    "type": "Microsoft.DataFactory/factories/pipelines",
+    "properties": {
+        "description": "Extract and load stage. Called by LoadSalesData_Pipeline with an already-open run id and a resolved incremental window. Kept as a separate pipeline so the orchestrator can wrap it in a single Execute Pipeline activity and attach one failure handler to the whole stage -- ADF's dependsOn is AND across listed activities, so a handler attached to five activities' Failed condition would only fire if all five failed.",
+        "parameters": {
+            "runId": {
+                "type": "int"
+            },
+            "watermarkFrom": {
+                "type": "string"
+            },
+            "watermarkTo": {
+                "type": "string"
+            }
+        },
+        "activities": [
+            {
+                "name": "TruncateStaging",
+                "description": "Clear the landing zone. Nothing worth keeping lives in stg -- rejected rows are already copied to etl.etl_rejected_row before deletion.",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "linkedServiceName": {
+                    "referenceName": "LS_SalesReportingDW_Target",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[etl].[usp_TruncateStaging]"
+                }
+            },
+            {
+                "name": "CountSourceHeader",
+                "description": "Ask the source how many rows it is offering in this window, and how current it is overall. Both numbers must come from the source connection -- the warehouse cannot see across to the OLTP system, and on Azure SQL Database a cross-database query is impossible. The in-window count is what row-count reconciliation is measured against; the unfiltered high-water mark is what the freshness check compares the warehouse to.",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderQuery": {
+                            "value": "SELECT row_count = COUNT_BIG(*),\n       high_water = (SELECT MAX(ModifiedDate) FROM Sales.SalesOrderHeader)\nFROM Sales.SalesOrderHeader\nWHERE ModifiedDate >= '@{pipeline().parameters.watermarkFrom}'\n  AND ModifiedDate <  '@{pipeline().parameters.watermarkTo}';",
+                            "type": "Expression"
+                        },
+                        "queryTimeout": "00:10:00",
+                        "partitionOption": "None"
+                    },
+                    "dataset": {
+                        "referenceName": "DS_Source_Control",
+                        "type": "DatasetReference"
+                    },
+                    "firstRowOnly": true
+                }
+            },
+            {
+                "name": "CountSourceDetail",
+                "description": "As CountSourceHeader, for the order-line table.",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderQuery": {
+                            "value": "SELECT row_count = COUNT_BIG(*),\n       high_water = (SELECT MAX(ModifiedDate) FROM Sales.SalesOrderDetail)\nFROM Sales.SalesOrderDetail\nWHERE ModifiedDate >= '@{pipeline().parameters.watermarkFrom}'\n  AND ModifiedDate <  '@{pipeline().parameters.watermarkTo}';",
+                            "type": "Expression"
+                        },
+                        "queryTimeout": "00:10:00",
+                        "partitionOption": "None"
+                    },
+                    "dataset": {
+                        "referenceName": "DS_Source_Control",
+                        "type": "DatasetReference"
+                    },
+                    "firstRowOnly": true
+                }
+            },
+            {
+                "name": "CopySalesOrderHeader",
+                "description": "Source -> staging. The half-open window [from, to) is deliberate: a closed upper bound would re-read the boundary row on every subsequent run. etl_run_id is stamped in the SELECT list so every staged row carries its lineage without a second pass.",
+                "type": "Copy",
+                "dependsOn": [
+                    {
+                        "activity": "TruncateStaging",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.02:00:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 60,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderQuery": {
+                            "value": "SELECT\n    SalesOrderID, RevisionNumber, OrderDate, DueDate, ShipDate, Status,\n    OnlineOrderFlag, SalesOrderNumber, PurchaseOrderNumber, AccountNumber,\n    CustomerID, SalesPersonID, TerritoryID, BillToAddressID, ShipToAddressID,\n    ShipMethodID, SubTotal, TaxAmt, Freight, TotalDue, Comment, ModifiedDate,\n    etl_run_id = @{pipeline().parameters.runId}\nFROM Sales.SalesOrderHeader\nWHERE ModifiedDate >= '@{pipeline().parameters.watermarkFrom}'\n  AND ModifiedDate <  '@{pipeline().parameters.watermarkTo}';",
+                            "type": "Expression"
+                        },
+                        "queryTimeout": "02:00:00",
+                        "partitionOption": "None"
+                    },
+                    "sink": {
+                        "type": "AzureSqlSink",
+                        "writeBehavior": "insert",
+                        "sqlWriterUseTableLock": true,
+                        "writeBatchSize": 10000,
+                        "writeBatchTimeout": "00:30:00",
+                        "tableOption": "none"
+                    },
+                    "enableStaging": false,
+                    "translator": {
+                        "type": "TabularTranslator",
+                        "typeConversion": true,
+                        "typeConversionSettings": {
+                            "allowDataTruncation": false,
+                            "treatBooleanAsNumber": false
+                        }
+                    }
+                },
+                "inputs": [
+                    {
+                        "referenceName": "DS_Source_SalesOrderHeader",
+                        "type": "DatasetReference"
+                    }
+                ],
+                "outputs": [
+                    {
+                        "referenceName": "DS_Stg_SalesOrderHeader",
+                        "type": "DatasetReference"
+                    }
+                ]
+            },
+            {
+                "name": "CopySalesOrderDetail",
+                "description": "Source -> staging for the order-line table. Runs in parallel with the header copy; the ordering constraint between the two is at load time, not extract time.",
+                "type": "Copy",
+                "dependsOn": [
+                    {
+                        "activity": "TruncateStaging",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.02:00:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 60,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderQuery": {
+                            "value": "SELECT\n    SalesOrderID, SalesOrderDetailID, CarrierTrackingNumber, OrderQty,\n    ProductID, SpecialOfferID, UnitPrice, UnitPriceDiscount, LineTotal,\n    ModifiedDate,\n    etl_run_id = @{pipeline().parameters.runId}\nFROM Sales.SalesOrderDetail\nWHERE ModifiedDate >= '@{pipeline().parameters.watermarkFrom}'\n  AND ModifiedDate <  '@{pipeline().parameters.watermarkTo}';",
+                            "type": "Expression"
+                        },
+                        "queryTimeout": "02:00:00",
+                        "partitionOption": "None"
+                    },
+                    "sink": {
+                        "type": "AzureSqlSink",
+                        "writeBehavior": "insert",
+                        "sqlWriterUseTableLock": true,
+                        "writeBatchSize": 10000,
+                        "writeBatchTimeout": "00:30:00",
+                        "tableOption": "none"
+                    },
+                    "enableStaging": false,
+                    "translator": {
+                        "type": "TabularTranslator",
+                        "typeConversion": true,
+                        "typeConversionSettings": {
+                            "allowDataTruncation": false,
+                            "treatBooleanAsNumber": false
+                        }
+                    }
+                },
+                "inputs": [
+                    {
+                        "referenceName": "DS_Source_SalesOrderDetail",
+                        "type": "DatasetReference"
+                    }
+                ],
+                "outputs": [
+                    {
+                        "referenceName": "DS_Stg_SalesOrderDetail",
+                        "type": "DatasetReference"
+                    }
+                ]
+            },
+            {
+                "name": "LogExtractHeader",
+                "description": "Record what the source offered against what actually landed. rowsCopied comes from the Copy activity's own output, so the reconciliation check later compares two independently observed numbers rather than one number with itself.",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [
+                    {
+                        "activity": "CopySalesOrderHeader",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    },
+                    {
+                        "activity": "CountSourceHeader",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "linkedServiceName": {
+                    "referenceName": "LS_SalesReportingDW_Target",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[etl].[usp_LogRunEntity]",
+                    "storedProcedureParameters": {
+                        "run_id": {
+                            "value": {
+                                "value": "@pipeline().parameters.runId",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        },
+                        "entity_name": {
+                            "value": "SalesOrderHeader",
+                            "type": "String"
+                        },
+                        "source_row_count": {
+                            "value": {
+                                "value": "@activity('CountSourceHeader').output.firstRow.row_count",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        },
+                        "source_max_watermark": {
+                            "value": {
+                                "value": "@activity('CountSourceHeader').output.firstRow.high_water",
+                                "type": "Expression"
+                            },
+                            "type": "DateTime"
+                        },
+                        "rows_extracted": {
+                            "value": {
+                                "value": "@activity('CopySalesOrderHeader').output.rowsCopied",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        },
+                        "extract_seconds": {
+                            "value": {
+                                "value": "@activity('CopySalesOrderHeader').output.copyDuration",
+                                "type": "Expression"
+                            },
+                            "type": "Decimal"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "LogExtractDetail",
+                "description": "As LogExtractHeader, for the order-line table.",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [
+                    {
+                        "activity": "CopySalesOrderDetail",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    },
+                    {
+                        "activity": "CountSourceDetail",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "linkedServiceName": {
+                    "referenceName": "LS_SalesReportingDW_Target",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[etl].[usp_LogRunEntity]",
+                    "storedProcedureParameters": {
+                        "run_id": {
+                            "value": {
+                                "value": "@pipeline().parameters.runId",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        },
+                        "entity_name": {
+                            "value": "SalesOrderDetail",
+                            "type": "String"
+                        },
+                        "source_row_count": {
+                            "value": {
+                                "value": "@activity('CountSourceDetail').output.firstRow.row_count",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        },
+                        "source_max_watermark": {
+                            "value": {
+                                "value": "@activity('CountSourceDetail').output.firstRow.high_water",
+                                "type": "Expression"
+                            },
+                            "type": "DateTime"
+                        },
+                        "rows_extracted": {
+                            "value": {
+                                "value": "@activity('CopySalesOrderDetail').output.rowsCopied",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        },
+                        "extract_seconds": {
+                            "value": {
+                                "value": "@activity('CopySalesOrderDetail').output.copyDuration",
+                                "type": "Expression"
+                            },
+                            "type": "Decimal"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "QuarantineBadRows",
+                "description": "Run the metadata-driven pre-load rules over everything in staging. Rows failing a Critical rule are copied to etl.etl_rejected_row and deleted from staging, so they are neither loaded nor lost. The procedure records its own rejection counts.",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [
+                    {
+                        "activity": "LogExtractHeader",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    },
+                    {
+                        "activity": "LogExtractDetail",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:30:00",
+                    "retry": 1,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "linkedServiceName": {
+                    "referenceName": "LS_SalesReportingDW_Target",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[etl].[usp_RunStagingRules]",
+                    "storedProcedureParameters": {
+                        "run_id": {
+                            "value": {
+                                "value": "@pipeline().parameters.runId",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "LoadSalesOrderHeader",
+                "description": "MERGE staging into dw.SalesOrderHeader. Headers load before details so the foreign key from detail to header is satisfiable within a single run.",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [
+                    {
+                        "activity": "QuarantineBadRows",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.01:00:00",
+                    "retry": 1,
+                    "retryIntervalInSeconds": 60,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "linkedServiceName": {
+                    "referenceName": "LS_SalesReportingDW_Target",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[etl].[usp_LoadSalesOrderHeader]",
+                    "storedProcedureParameters": {
+                        "run_id": {
+                            "value": {
+                                "value": "@pipeline().parameters.runId",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "LoadSalesOrderDetail",
+                "description": "MERGE staging into dw.SalesOrderDetail, skipping any line whose header is present in neither dw nor this batch.",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [
+                    {
+                        "activity": "LoadSalesOrderHeader",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.01:00:00",
+                    "retry": 1,
+                    "retryIntervalInSeconds": 60,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "linkedServiceName": {
+                    "referenceName": "LS_SalesReportingDW_Target",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[etl].[usp_LoadSalesOrderDetail]",
+                    "storedProcedureParameters": {
+                        "run_id": {
+                            "value": {
+                                "value": "@pipeline().parameters.runId",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        }
+                    }
+                }
+            }
+        ],
+        "annotations": [
+            "sales",
+            "etl",
+            "extract-load"
+        ],
+        "folder": {
+            "name": "SalesETL"
+        }
+    }
+}

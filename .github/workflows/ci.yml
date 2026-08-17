@@ -1,0 +1,189 @@
+name: CI
+
+# The test suite is integration-level -- it runs against a real SQL Server,
+# because the code under test is SQL. So CI stands up an actual SQL Server 2022
+# instance, restores the real AdventureWorks database into it, deploys the
+# schema, and runs the pipeline end to end. A green build here means the
+# pipeline genuinely moved 152,782 rows and reconciled them, not that a mock
+# agreed with itself.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  MSSQL_SA_PASSWORD: ciP@ssw0rd_2024!
+  ETL_SOURCE_SERVER: localhost,1433
+  ETL_SOURCE_DATABASE: AdventureWorks2022
+  ETL_SOURCE_USER: sa
+  ETL_SOURCE_PASSWORD: ciP@ssw0rd_2024!
+  ETL_TARGET_SERVER: localhost,1433
+  ETL_TARGET_DATABASE: SalesReportingDW
+  ETL_TARGET_USER: sa
+  ETL_TARGET_PASSWORD: ciP@ssw0rd_2024!
+  ETL_ODBC_DRIVER: ODBC Driver 18 for SQL Server
+  ETL_TRUST_SERVER_CERTIFICATE: "yes"
+
+jobs:
+  static:
+    name: Static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate ADF artifacts
+        # ADF's git integration requires filename == resource name. A rename
+        # that misses one of the two breaks publishing silently.
+        run: |
+          python - <<'PY'
+          import json, pathlib, sys
+          bad = 0
+          for p in sorted(pathlib.Path('adf').rglob('*.json')):
+              try:
+                  d = json.loads(p.read_text())
+              except Exception as e:
+                  print(f'INVALID JSON  {p}: {e}'); bad += 1; continue
+              if 'name' in d and d['name'] != p.stem:
+                  print(f"NAME MISMATCH {p}: {d['name']!r} != {p.stem!r}"); bad += 1
+              else:
+                  print(f'ok  {p}')
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: Check no secrets are committed
+        run: |
+          if git ls-files --error-unmatch .env 2>/dev/null; then
+            echo "::error::.env is tracked by git. It holds real credentials and must be ignored."
+            exit 1
+          fi
+          # Connection strings carrying an inline password, outside the example
+          # file and the docs that explain the format.
+          #
+          # The character class excludes { } < > $ so that template forms are
+          # not flagged: f"PWD={self.password}" in etl/config.py and
+          # "sqlAdminPassword=<password>" in infra/main.bicep are placeholders,
+          # not credentials. A literal secret has none of those characters.
+          if git grep -nEI "(Password|PWD)=[^;\"'{}<>\$ ]{6,}" -- \
+               ':!.env.example' ':!docs/**' ':!.github/**' ':!scripts/Deploy-Azure.ps1'; then
+            echo "::error::Possible hard-coded credential found."
+            exit 1
+          fi
+          echo "No committed secrets found."
+
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: ciP@ssw0rd_2024!
+          MSSQL_PID: Developer
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' -b"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 20
+          --health-start-period 60s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ODBC Driver 18
+        run: |
+          set -euo pipefail
+          curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+          curl -fsSL https://packages.microsoft.com/config/ubuntu/22.04/prod.list \
+            | sudo tee /etc/apt/sources.list.d/mssql-release.list > /dev/null
+          sudo apt-get update -qq
+          sudo ACCEPT_EULA=Y apt-get install -y -qq msodbcsql18 mssql-tools18
+          echo "/opt/mssql-tools18/bin" >> "$GITHUB_PATH"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Cache AdventureWorks backup
+        id: cache-bak
+        uses: actions/cache@v4
+        with:
+          path: data/backup/AdventureWorks2022.bak
+          key: adventureworks2022-bak-v1
+
+      - name: Download AdventureWorks2022
+        if: steps.cache-bak.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p data/backup
+          curl -fSL --retry 3 -o data/backup/AdventureWorks2022.bak \
+            https://github.com/Microsoft/sql-server-samples/releases/download/adventureworks/AdventureWorks2022.bak
+
+      - name: Write .env
+        # The service container's password is a throwaway for this job only.
+        run: |
+          cp .env.example .env
+          sed -i "s|^MSSQL_SA_PASSWORD=.*|MSSQL_SA_PASSWORD=${MSSQL_SA_PASSWORD}|" .env
+          sed -i "s|^ETL_SOURCE_PASSWORD=.*|ETL_SOURCE_PASSWORD=${MSSQL_SA_PASSWORD}|" .env
+          sed -i "s|^ETL_TARGET_PASSWORD=.*|ETL_TARGET_PASSWORD=${MSSQL_SA_PASSWORD}|" .env
+
+      - name: Restore AdventureWorks2022
+        run: |
+          set -euo pipefail
+          # The service container has no bind mount, so the backup is copied in.
+          CONTAINER=$(docker ps --filter "ancestor=mcr.microsoft.com/mssql/server:2022-latest" --format '{{.ID}}' | head -1)
+          docker exec "$CONTAINER" mkdir -p /var/opt/mssql/backup
+          docker cp data/backup/AdventureWorks2022.bak "$CONTAINER":/var/opt/mssql/backup/
+          sqlcmd -S localhost,1433 -U sa -P "$MSSQL_SA_PASSWORD" -C -b \
+            -v BackupPath="/var/opt/mssql/backup/AdventureWorks2022.bak" DatabaseName="AdventureWorks2022" \
+            -i sql/00_restore_adventureworks.sql
+
+      - name: Deploy schema
+        run: |
+          set -euo pipefail
+          for script in 01_create_databases 02_target_schema 03_etl_procedures 04_validation_checks; do
+            db=SalesReportingDW
+            [ "$script" = "01_create_databases" ] && db=master
+            echo "==> sql/${script}.sql -> ${db}"
+            sqlcmd -S localhost,1433 -U sa -P "$MSSQL_SA_PASSWORD" -C -b -d "$db" -i "sql/${script}.sql"
+          done
+
+      - name: Baseline full load
+        run: python -m etl.run_pipeline --trigger Scheduled --load-type Full
+
+      - name: Run test suite
+        run: python -m pytest tests/ -q
+
+      - name: Fault injection must be caught
+        # The strongest assertion in the build: corrupted rows are quarantined,
+        # the warehouse stays clean, an alert fires, and the next run recovers
+        # on its own. Exits non-zero if any of that fails to hold.
+        run: python scripts/run_experiment.py --nights 2 --fault-count 3
+
+      - name: Metrics report
+        run: python -m etl.metrics
+
+      - name: Upload metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-metrics
+          path: |
+            reports/metrics.md
+            reports/metrics.json
+          if-no-files-found: ignore

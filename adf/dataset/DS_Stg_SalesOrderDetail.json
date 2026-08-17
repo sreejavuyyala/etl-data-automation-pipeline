@@ -1,0 +1,20 @@
+{
+    "name": "DS_Stg_SalesOrderDetail",
+    "type": "Microsoft.DataFactory/factories/datasets",
+    "properties": {
+        "description": "Landing table stg.SalesOrderDetail in SalesReportingDW. Copy sink only.",
+        "linkedServiceName": {
+            "referenceName": "LS_SalesReportingDW_Target",
+            "type": "LinkedServiceReference"
+        },
+        "annotations": [
+            "staging"
+        ],
+        "type": "AzureSqlTable",
+        "schema": [],
+        "typeProperties": {
+            "schema": "stg",
+            "table": "SalesOrderDetail"
+        }
+    }
+}

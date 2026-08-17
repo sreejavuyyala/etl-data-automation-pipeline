@@ -1,0 +1,18 @@
+{
+    "name": "LS_KeyVault",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "description": "Azure Key Vault holding every secret this factory needs. No connection string, password, or webhook URL is stored in the factory itself -- each of the other linked services references a secret by name through this one. The factory's system-assigned managed identity is granted 'Key Vault Secrets User' on the vault; nothing in this repository can be used to authenticate to anything.",
+        "annotations": [],
+        "type": "AzureKeyVault",
+        "typeProperties": {
+            "baseUrl": "https://@{linkedService().keyVaultName}.vault.azure.net/"
+        },
+        "parameters": {
+            "keyVaultName": {
+                "type": "string",
+                "defaultValue": "kv-etl-salesdw"
+            }
+        }
+    }
+}

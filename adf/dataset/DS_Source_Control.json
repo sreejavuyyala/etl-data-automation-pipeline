@@ -1,0 +1,20 @@
+{
+    "name": "DS_Source_Control",
+    "type": "Microsoft.DataFactory/factories/datasets",
+    "properties": {
+        "description": "Binding dataset for Lookup activities that count rows in the source. Needed because row-count reconciliation must ask the *source* how many rows it has -- the target database cannot see across to it, and on Azure SQL Database a cross-database query is not possible at all.",
+        "linkedServiceName": {
+            "referenceName": "LS_AdventureWorks_Source",
+            "type": "LinkedServiceReference"
+        },
+        "annotations": [
+            "control"
+        ],
+        "type": "AzureSqlTable",
+        "schema": [],
+        "typeProperties": {
+            "schema": "Sales",
+            "table": "SalesOrderHeader"
+        }
+    }
+}

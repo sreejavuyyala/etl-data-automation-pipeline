@@ -1,0 +1,29 @@
+{
+    "name": "LS_SalesReportingDW_Target",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "description": "Target staging / reporting database (SalesReportingDW). Holds the stg, dw and etl schemas. Every stored procedure the pipeline calls lives here, so this linked service is used for the control-flow activities as well as the Copy sinks.",
+        "annotations": [
+            "target",
+            "warehouse"
+        ],
+        "type": "AzureSqlDatabase",
+        "typeProperties": {
+            "connectionString": {
+                "type": "AzureKeyVaultSecret",
+                "store": {
+                    "referenceName": "LS_KeyVault",
+                    "type": "LinkedServiceReference",
+                    "parameters": {
+                        "keyVaultName": "kv-etl-salesdw"
+                    }
+                },
+                "secretName": "salesreportingdw-target-connectionstring"
+            }
+        },
+        "connectVia": {
+            "referenceName": "AutoResolveIntegrationRuntime",
+            "type": "IntegrationRuntimeReference"
+        }
+    }
+}

@@ -1,0 +1,534 @@
+{
+    "name": "LoadSalesData_Pipeline",
+    "type": "Microsoft.DataFactory/factories/pipelines",
+    "properties": {
+        "description": "Scheduled orchestrator for the Sales ETL. Opens a run, delegates extract/load and validation to child pipelines, then branches on the validation outcome: alert and fail, or finish and advance the watermark. This is the pipeline the daily trigger fires. Structured as a try/catch around Execute Pipeline activities because ADF's dependsOn is AND across all listed activities -- a failure handler attached to ten activities would only run if all ten failed, so the work is wrapped in one activity that can fail as a unit.",
+        "parameters": {
+            "runTrigger": {
+                "type": "string",
+                "defaultValue": "Scheduled"
+            },
+            "loadType": {
+                "type": "string",
+                "defaultValue": "Incremental"
+            }
+        },
+        "variables": {
+            "alertSubject": {
+                "type": "String"
+            }
+        },
+        "activities": [
+            {
+                "name": "StartRun",
+                "description": "Open the run and resolve the incremental window in one round trip. Returns run_id, watermark_from and watermark_to. The upper bound is pinned to the run's start time rather than 'now', so rows modified during the run belong to the next window and cannot be skipped.",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderStoredProcedureName": "[etl].[usp_StartRun]",
+                        "storedProcedureParameters": {
+                            "pipeline_name": {
+                                "type": "String",
+                                "value": "LoadSalesData_Pipeline"
+                            },
+                            "run_trigger": {
+                                "type": "String",
+                                "value": {
+                                    "value": "@pipeline().parameters.runTrigger",
+                                    "type": "Expression"
+                                }
+                            },
+                            "load_type": {
+                                "type": "String",
+                                "value": {
+                                    "value": "@pipeline().parameters.loadType",
+                                    "type": "Expression"
+                                }
+                            }
+                        },
+                        "queryTimeout": "00:10:00",
+                        "partitionOption": "None"
+                    },
+                    "dataset": {
+                        "referenceName": "DS_Target_Control",
+                        "type": "DatasetReference"
+                    },
+                    "firstRowOnly": true
+                }
+            },
+            {
+                "name": "ExtractAndLoad",
+                "description": "The whole extract/load stage as one unit, so a failure anywhere inside it lands on this activity's Failed edge.",
+                "type": "ExecutePipeline",
+                "dependsOn": [
+                    {
+                        "activity": "StartRun",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "pipeline": {
+                        "referenceName": "LoadSalesData_Extract_Pipeline",
+                        "type": "PipelineReference"
+                    },
+                    "waitOnCompletion": true,
+                    "parameters": {
+                        "runId": {
+                            "value": "@activity('StartRun').output.firstRow.run_id",
+                            "type": "Expression"
+                        },
+                        "watermarkFrom": {
+                            "value": "@activity('StartRun').output.firstRow.watermark_from",
+                            "type": "Expression"
+                        },
+                        "watermarkTo": {
+                            "value": "@activity('StartRun').output.firstRow.watermark_to",
+                            "type": "Expression"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "ValidateLoadedData",
+                "description": "Row-count reconciliation, referential and financial assertions, warehouse domain checks and pipeline-lag freshness. Every result is written to etl.etl_validation_log.",
+                "type": "ExecutePipeline",
+                "dependsOn": [
+                    {
+                        "activity": "ExtractAndLoad",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "pipeline": {
+                        "referenceName": "ValidateSalesData_Pipeline",
+                        "type": "PipelineReference"
+                    },
+                    "waitOnCompletion": true,
+                    "parameters": {
+                        "runId": {
+                            "value": "@activity('StartRun').output.firstRow.run_id",
+                            "type": "Expression"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "GetValidationResult",
+                "description": "Flatten the run's validation results into the single row the branch below tests. Execute Pipeline does not return a child pipeline's output, so the verdict is read from the database rather than passed back through the graph.",
+                "type": "Lookup",
+                "dependsOn": [
+                    {
+                        "activity": "ValidateLoadedData",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderStoredProcedureName": "[etl].[usp_GetRunValidationResult]",
+                        "storedProcedureParameters": {
+                            "run_id": {
+                                "type": "Int64",
+                                "value": {
+                                    "value": "@activity('StartRun').output.firstRow.run_id",
+                                    "type": "Expression"
+                                }
+                            }
+                        },
+                        "queryTimeout": "00:10:00",
+                        "partitionOption": "None"
+                    },
+                    "dataset": {
+                        "referenceName": "DS_Target_Control",
+                        "type": "DatasetReference"
+                    },
+                    "firstRowOnly": true
+                }
+            },
+            {
+                "name": "IfValidationFailed",
+                "description": "The decision point. should_alert is computed in SQL, not here -- the pipeline asks the database what happened rather than forming its own opinion about it.",
+                "type": "IfCondition",
+                "dependsOn": [
+                    {
+                        "activity": "GetValidationResult",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@equals(activity('GetValidationResult').output.firstRow.should_alert, true)",
+                        "type": "Expression"
+                    },
+                    "ifTrueActivities": [
+                        {
+                            "name": "RaiseValidationAlert",
+                            "type": "ExecutePipeline",
+                            "dependsOn": [],
+                            "policy": {
+                                "secureInput": false
+                            },
+                            "typeProperties": {
+                                "pipeline": {
+                                    "referenceName": "RaiseAlert_Pipeline",
+                                    "type": "PipelineReference"
+                                },
+                                "waitOnCompletion": true,
+                                "parameters": {
+                                    "runId": {
+                                        "value": "@activity('StartRun').output.firstRow.run_id",
+                                        "type": "Expression"
+                                    },
+                                    "alertType": "ValidationFailure",
+                                    "severity": "Critical",
+                                    "subject": {
+                                        "value": "@concat('ETL run ', string(activity('StartRun').output.firstRow.run_id), ' FAILED validation (', string(activity('GetValidationResult').output.firstRow.critical_failed), ' critical)')",
+                                        "type": "Expression"
+                                    },
+                                    "details": {
+                                        "value": "@concat('Failed checks: ', coalesce(activity('GetValidationResult').output.firstRow.failed_check_list, 'none'))",
+                                        "type": "Expression"
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "EndRunFailed",
+                            "description": "Close the run as Failed. The watermark is deliberately NOT advanced, so the next run re-reads the same window instead of stepping over data that never arrived.",
+                            "type": "SqlServerStoredProcedure",
+                            "dependsOn": [
+                                {
+                                    "activity": "RaiseValidationAlert",
+                                    "dependencyConditions": [
+                                        "Completed"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.00:10:00",
+                                "retry": 2,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "linkedServiceName": {
+                                "referenceName": "LS_SalesReportingDW_Target",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "storedProcedureName": "[etl].[usp_EndRun]",
+                                "storedProcedureParameters": {
+                                    "run_id": {
+                                        "value": {
+                                            "value": "@activity('StartRun').output.firstRow.run_id",
+                                            "type": "Expression"
+                                        },
+                                        "type": "Int64"
+                                    },
+                                    "status": {
+                                        "value": "Failed",
+                                        "type": "String"
+                                    },
+                                    "error_message": {
+                                        "value": {
+                                            "value": "@concat('Validation failed: ', coalesce(activity('GetValidationResult').output.firstRow.failed_check_list, 'unknown'))",
+                                            "type": "Expression"
+                                        },
+                                        "type": "String"
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "FailPipeline",
+                            "description": "Mark the ADF run itself as failed, so the Azure Monitor alert rule in adf/alerts/ fires and the run shows red in the monitoring blade. Without this the pipeline would report success while the data was known to be wrong.",
+                            "type": "Fail",
+                            "dependsOn": [
+                                {
+                                    "activity": "EndRunFailed",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "typeProperties": {
+                                "message": {
+                                    "value": "@concat('Validation failed for run ', string(activity('StartRun').output.firstRow.run_id), ': ', coalesce(activity('GetValidationResult').output.firstRow.failed_check_list, 'unknown'))",
+                                    "type": "Expression"
+                                },
+                                "errorCode": "ValidationFailed"
+                            }
+                        }
+                    ],
+                    "ifFalseActivities": [
+                        {
+                            "name": "EndRunSucceeded",
+                            "description": "Close the run. usp_EndRun derives the final status from the validation results rather than accepting one -- warnings become CompletedWithWarnings, a clean run becomes Succeeded.",
+                            "type": "SqlServerStoredProcedure",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "0.00:10:00",
+                                "retry": 2,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "linkedServiceName": {
+                                "referenceName": "LS_SalesReportingDW_Target",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "storedProcedureName": "[etl].[usp_EndRun]",
+                                "storedProcedureParameters": {
+                                    "run_id": {
+                                        "value": {
+                                            "value": "@activity('StartRun').output.firstRow.run_id",
+                                            "type": "Expression"
+                                        },
+                                        "type": "Int64"
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "AdvanceWatermarkHeader",
+                            "description": "Only after validation passed. This is what makes a failed run safe: the watermark stays put, so nothing is skipped.",
+                            "type": "SqlServerStoredProcedure",
+                            "dependsOn": [
+                                {
+                                    "activity": "EndRunSucceeded",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.00:10:00",
+                                "retry": 2,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "linkedServiceName": {
+                                "referenceName": "LS_SalesReportingDW_Target",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "storedProcedureName": "[etl].[usp_SetWatermark]",
+                                "storedProcedureParameters": {
+                                    "entity_name": {
+                                        "value": "SalesOrderHeader",
+                                        "type": "String"
+                                    },
+                                    "watermark_value": {
+                                        "value": {
+                                            "value": "@activity('StartRun').output.firstRow.watermark_to",
+                                            "type": "Expression"
+                                        },
+                                        "type": "DateTime"
+                                    },
+                                    "run_id": {
+                                        "value": {
+                                            "value": "@activity('StartRun').output.firstRow.run_id",
+                                            "type": "Expression"
+                                        },
+                                        "type": "Int64"
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "AdvanceWatermarkDetail",
+                            "type": "SqlServerStoredProcedure",
+                            "dependsOn": [
+                                {
+                                    "activity": "EndRunSucceeded",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.00:10:00",
+                                "retry": 2,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "linkedServiceName": {
+                                "referenceName": "LS_SalesReportingDW_Target",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "storedProcedureName": "[etl].[usp_SetWatermark]",
+                                "storedProcedureParameters": {
+                                    "entity_name": {
+                                        "value": "SalesOrderDetail",
+                                        "type": "String"
+                                    },
+                                    "watermark_value": {
+                                        "value": {
+                                            "value": "@activity('StartRun').output.firstRow.watermark_to",
+                                            "type": "Expression"
+                                        },
+                                        "type": "DateTime"
+                                    },
+                                    "run_id": {
+                                        "value": {
+                                            "value": "@activity('StartRun').output.firstRow.run_id",
+                                            "type": "Expression"
+                                        },
+                                        "type": "Int64"
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                "name": "HandleStageFailure",
+                "description": "Catch block. Fires when the extract/load or validation stage throws -- a copy timing out, the source being unreachable, a deadlock. Without this the run row would sit at 'Running' forever: the metrics would silently stop counting it and nothing would notice the pipeline had stopped.",
+                "type": "ExecutePipeline",
+                "dependsOn": [
+                    {
+                        "activity": "ExtractAndLoad",
+                        "dependencyConditions": [
+                            "Failed"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "pipeline": {
+                        "referenceName": "RaiseAlert_Pipeline",
+                        "type": "PipelineReference"
+                    },
+                    "waitOnCompletion": true,
+                    "parameters": {
+                        "runId": {
+                            "value": "@activity('StartRun').output.firstRow.run_id",
+                            "type": "Expression"
+                        },
+                        "alertType": "PipelineFailure",
+                        "severity": "Critical",
+                        "subject": {
+                            "value": "@concat('ETL run ', string(activity('StartRun').output.firstRow.run_id), ' FAILED during extract/load')",
+                            "type": "Expression"
+                        },
+                        "details": {
+                            "value": "@concat('Stage error: ', string(activity('ExtractAndLoad').Error.message))",
+                            "type": "Expression"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "EndRunOnStageFailure",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [
+                    {
+                        "activity": "HandleStageFailure",
+                        "dependencyConditions": [
+                            "Completed"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "linkedServiceName": {
+                    "referenceName": "LS_SalesReportingDW_Target",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[etl].[usp_EndRun]",
+                    "storedProcedureParameters": {
+                        "run_id": {
+                            "value": {
+                                "value": "@activity('StartRun').output.firstRow.run_id",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        },
+                        "status": {
+                            "value": "Failed",
+                            "type": "String"
+                        },
+                        "error_message": {
+                            "value": {
+                                "value": "@concat('Extract/load stage failed: ', string(activity('ExtractAndLoad').Error.message))",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "FailOnStageFailure",
+                "type": "Fail",
+                "dependsOn": [
+                    {
+                        "activity": "EndRunOnStageFailure",
+                        "dependencyConditions": [
+                            "Completed"
+                        ]
+                    }
+                ],
+                "typeProperties": {
+                    "message": {
+                        "value": "@concat('Extract/load stage failed for run ', string(activity('StartRun').output.firstRow.run_id))",
+                        "type": "Expression"
+                    },
+                    "errorCode": "ExtractLoadFailed"
+                }
+            }
+        ],
+        "annotations": [
+            "sales",
+            "etl",
+            "scheduled"
+        ],
+        "folder": {
+            "name": "SalesETL"
+        }
+    }
+}

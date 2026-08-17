@@ -1,0 +1,199 @@
+{
+    "name": "RaiseAlert_Pipeline",
+    "type": "Microsoft.DataFactory/factories/pipelines",
+    "properties": {
+        "description": "Records an alert in the database and delivers it to the Logic App. Factored out because both failure paths in LoadSalesData_Pipeline need it, and duplicating a Key Vault fetch plus an HTTP POST in two branches is how the two branches end up subtly different. Recording and delivery are separate steps on purpose: the durable record in etl.etl_alert is what the 'runs that needed a human' metric counts, and it must survive the notification channel being unreachable.",
+        "parameters": {
+            "runId": {
+                "type": "int"
+            },
+            "alertType": {
+                "type": "string",
+                "defaultValue": "PipelineFailure"
+            },
+            "severity": {
+                "type": "string",
+                "defaultValue": "Critical"
+            },
+            "subject": {
+                "type": "string"
+            },
+            "details": {
+                "type": "string",
+                "defaultValue": ""
+            }
+        },
+        "activities": [
+            {
+                "name": "RecordAlert",
+                "description": "Write the alert to etl.etl_alert first. If delivery fails afterwards, the evidence that an alert was raised still exists.",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "linkedServiceName": {
+                    "referenceName": "LS_SalesReportingDW_Target",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[etl].[usp_RaiseAlert]",
+                    "storedProcedureParameters": {
+                        "run_id": {
+                            "value": {
+                                "value": "@pipeline().parameters.runId",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        },
+                        "alert_type": {
+                            "value": {
+                                "value": "@pipeline().parameters.alertType",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        },
+                        "severity": {
+                            "value": {
+                                "value": "@pipeline().parameters.severity",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        },
+                        "subject": {
+                            "value": {
+                                "value": "@pipeline().parameters.subject",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        },
+                        "body": {
+                            "value": {
+                                "value": "@pipeline().parameters.details",
+                                "type": "Expression"
+                            },
+                            "type": "String"
+                        },
+                        "channel": {
+                            "value": "LogicApp",
+                            "type": "String"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "GetAlertWebhookUrl",
+                "description": "Fetch the Logic App callback URL from Key Vault using the factory's managed identity. The URL embeds a SAS signature, so it is a secret and must not live in this repository, in a pipeline parameter, or in the factory's published JSON. secureOutput hides it from the activity output in the monitoring blade.",
+                "type": "WebActivity",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:05:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 15,
+                    "secureOutput": true,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "method": "GET",
+                    "url": "https://kv-etl-salesdw.vault.azure.net/secrets/etl-alert-logicapp-url?api-version=7.4",
+                    "authentication": {
+                        "type": "MSI",
+                        "resource": "https://vault.azure.net"
+                    }
+                }
+            },
+            {
+                "name": "NotifyLogicApp",
+                "description": "POST the alert payload to the Logic App, which fans it out to email and Teams. Field names match the schema in adf/alerts/LogicApp_EtlFailureNotification.json and the payload the local runner sends, so one endpoint serves both.",
+                "type": "WebActivity",
+                "dependsOn": [
+                    {
+                        "activity": "RecordAlert",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    },
+                    {
+                        "activity": "GetAlertWebhookUrl",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:05:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 15,
+                    "secureOutput": false,
+                    "secureInput": true
+                },
+                "typeProperties": {
+                    "method": "POST",
+                    "url": {
+                        "value": "@activity('GetAlertWebhookUrl').output.value",
+                        "type": "Expression"
+                    },
+                    "headers": {
+                        "Content-Type": "application/json"
+                    },
+                    "body": {
+                        "value": "@json(concat('{\"alertType\":\"', pipeline().parameters.alertType, '\",\"severity\":\"', pipeline().parameters.severity, '\",\"subject\":\"', pipeline().parameters.subject, '\",\"runId\":', string(pipeline().parameters.runId), ',\"pipeline\":\"LoadSalesData\",\"raisedAtUtc\":\"', utcNow(), '\",\"dataFactory\":\"', pipeline().DataFactory, '\",\"adfRunId\":\"', pipeline().RunId, '\",\"details\":{\"message\":\"', replace(pipeline().parameters.details, '\"', ''''), '\"}}'))",
+                        "type": "Expression"
+                    }
+                }
+            },
+            {
+                "name": "MarkAlertDelivered",
+                "description": "Close the loop on the durable record. Only the most recent alert for the run is updated, which is correct because RaiseAlert_Pipeline records exactly one.",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [
+                    {
+                        "activity": "NotifyLogicApp",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "linkedServiceName": {
+                    "referenceName": "LS_SalesReportingDW_Target",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "storedProcedureName": "[etl].[usp_MarkAlertDelivered]",
+                    "storedProcedureParameters": {
+                        "run_id": {
+                            "value": {
+                                "value": "@pipeline().parameters.runId",
+                                "type": "Expression"
+                            },
+                            "type": "Int64"
+                        },
+                        "delivery_detail": {
+                            "value": "Delivered to Logic App via ADF Web activity",
+                            "type": "String"
+                        }
+                    }
+                }
+            }
+        ],
+        "annotations": [
+            "sales",
+            "etl",
+            "alerting"
+        ],
+        "folder": {
+            "name": "SalesETL"
+        }
+    }
+}
