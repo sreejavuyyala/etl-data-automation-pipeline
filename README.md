@@ -1,5 +1,11 @@
 # ETL Data Automation Pipeline
 
+[![CI](https://github.com/sreejavuyyala/etl-data-automation-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/sreejavuyyala/etl-data-automation-pipeline/actions/workflows/ci.yml)
+[![Live dashboard](https://img.shields.io/badge/dashboard-live-2a78d6)](https://sreejavuyyala.github.io/etl-data-automation-pipeline/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-informational)](LICENSE)
+
+**[View the measured-results dashboard →](https://sreejavuyyala.github.io/etl-data-automation-pipeline/)**
+
 Scheduled, self-validating ETL from an OLTP sales system into a reporting
 warehouse — built on **Azure Data Factory** and **SQL Server 2022**, using
 Microsoft's **AdventureWorks2022** sample database as the source.
