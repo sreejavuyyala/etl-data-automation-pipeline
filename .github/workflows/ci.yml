@@ -107,13 +107,30 @@ jobs:
       - name: Install ODBC Driver 18
         run: |
           set -euo pipefail
+          # The key goes into trusted.gpg.d as ASCII armour rather than through
+          # `gpg --dearmor`. gpg wants a controlling terminal and there isn't
+          # one on a runner, so it dies with "cannot open '/dev/tty'" before it
+          # writes anything. apt reads .asc files here directly, so gpg is not
+          # needed at all.
           curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
-            | sudo gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
-          curl -fsSL https://packages.microsoft.com/config/ubuntu/22.04/prod.list \
+            | sudo tee /etc/apt/trusted.gpg.d/microsoft.asc > /dev/null
+
+          # Resolve the runner's actual Ubuntu release. Hard-coding 22.04 broke
+          # the moment ubuntu-latest moved to 24.04.
+          UBUNTU_VERSION="$(lsb_release -rs)"
+          echo "Runner is Ubuntu ${UBUNTU_VERSION}"
+          curl -fsSL "https://packages.microsoft.com/config/ubuntu/${UBUNTU_VERSION}/prod.list" \
             | sudo tee /etc/apt/sources.list.d/mssql-release.list > /dev/null
+
           sudo apt-get update -qq
           sudo ACCEPT_EULA=Y apt-get install -y -qq msodbcsql18 mssql-tools18
           echo "/opt/mssql-tools18/bin" >> "$GITHUB_PATH"
+
+          # Fail here with a clear message rather than 40 lines later on a
+          # connection error that looks like a database problem.
+          odbcinst -q -d | grep -q "ODBC Driver 18 for SQL Server" \
+            || { echo "::error::ODBC Driver 18 did not register"; odbcinst -q -d; exit 1; }
+          echo "ODBC Driver 18 registered."
 
       - name: Install Python dependencies
         run: |
@@ -143,12 +160,17 @@ jobs:
           sed -i "s|^ETL_TARGET_PASSWORD=.*|ETL_TARGET_PASSWORD=${MSSQL_SA_PASSWORD}|" .env
 
       - name: Restore AdventureWorks2022
+        env:
+          # The runner exposes the service container's id directly. Finding it
+          # with `docker ps --filter ancestor=...` also works until something
+          # else on the runner shares that image, at which point it silently
+          # picks the wrong one.
+          SQL_CONTAINER: ${{ job.services.sqlserver.id }}
         run: |
           set -euo pipefail
           # The service container has no bind mount, so the backup is copied in.
-          CONTAINER=$(docker ps --filter "ancestor=mcr.microsoft.com/mssql/server:2022-latest" --format '{{.ID}}' | head -1)
-          docker exec "$CONTAINER" mkdir -p /var/opt/mssql/backup
-          docker cp data/backup/AdventureWorks2022.bak "$CONTAINER":/var/opt/mssql/backup/
+          docker exec "$SQL_CONTAINER" mkdir -p /var/opt/mssql/backup
+          docker cp data/backup/AdventureWorks2022.bak "$SQL_CONTAINER":/var/opt/mssql/backup/
           sqlcmd -S localhost,1433 -U sa -P "$MSSQL_SA_PASSWORD" -C -b \
             -v BackupPath="/var/opt/mssql/backup/AdventureWorks2022.bak" DatabaseName="AdventureWorks2022" \
             -i sql/00_restore_adventureworks.sql
