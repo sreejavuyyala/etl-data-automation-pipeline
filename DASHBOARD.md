@@ -183,5 +183,5 @@ properties being asserted do not.
 ---
 
 <sub>A richer version of this page — with proper charts and both light and dark themes —
-lives in <a href="github-pages/index.html"><code>github-pages/index.html</code></a>, ready
-to publish with GitHub Pages.</sub>
+is live at <a href="https://sreejavuyyala.github.io/etl-data-automation-pipeline/">https://sreejavuyyala.github.io/etl-data-automation-pipeline/</a>, served from
+<a href="docs/index.html"><code>docs/index.html</code></a>.</sub>

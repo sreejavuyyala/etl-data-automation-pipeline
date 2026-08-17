@@ -226,6 +226,7 @@ infra/main.bicep                  Azure SQL, Key Vault, data factory, RBAC
 scripts/                          Setup, deployment, experiment and fault-injection harnesses
 tests/                            41 integration tests against a live database
 docs/                             architecture.md, runbook.md, metrics-methodology.md
+  index.html                      The dashboard — served by GitHub Pages
 reports/                          Generated metrics — regenerate, don't edit
 ```
 
@@ -248,8 +249,8 @@ reports/                          Generated metrics — regenerate, don't edit
 
 [**`DASHBOARD.md`**](DASHBOARD.md) — the measured results with diagrams and the full
 run ledger, rendered inline by GitHub. A richer version with proper charts and both
-themes is in [`github-pages/index.html`](github-pages/index.html), ready to publish
-with GitHub Pages (Settings → Pages → Deploy from branch → `/github-pages`).
+themes is live at **<https://sreejavuyyala.github.io/etl-data-automation-pipeline/>**, served by GitHub Pages from
+[`docs/index.html`](docs/index.html) and rebuilt on every push to `main`.
 
 ---
 
